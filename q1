@@ -1,0 +1,142 @@
+print("[MH] start")
+
+local P=game:GetService("Players")
+local RS=game:GetService("RunService")
+local plr=P.LocalPlayer
+local WS,JP,FS=16,50,60
+local fly,auto,up,down=false,false,false,false
+local char,hrp,hum,bv
+
+-- ================= GUI FIRST (khong phu thuoc nhan vat) =================
+local sg=Instance.new("ScreenGui")
+sg.Name="MH"
+sg.ResetOnSpawn=false
+sg.DisplayOrder=999
+sg.Parent=game:GetService("CoreGui")
+
+local F=Instance.new("Frame",sg)
+F.Size=UDim2.new(0,180,0,240)
+F.Position=UDim2.new(0,10,0,120)
+F.BackgroundColor3=Color3.fromRGB(25,25,25)
+
+local function newBtn(txt,x,y,w)
+ local b=Instance.new("TextButton",F)
+ b.Size=UDim2.new(0,w,0,32)
+ b.Position=UDim2.new(0,x,0,y)
+ b.BackgroundColor3=Color3.fromRGB(45,45,45)
+ b.TextColor3=Color3.fromRGB(255,255,255)
+ b.TextSize=14
+ b.Text=txt
+ return b
+end
+
+local function newBox(label,y,get,set)
+ local l=Instance.new("TextLabel",F)
+ l.Size=UDim2.new(0,80,0,30)
+ l.Position=UDim2.new(0,8,0,y)
+ l.BackgroundTransparency=1
+ l.TextColor3=Color3.fromRGB(230,230,230)
+ l.TextXAlignment=Enum.TextXAlignment.Left
+ l.TextSize=14
+ l.Text=label
+ local bx=Instance.new("TextBox",F)
+ bx.Size=UDim2.new(0,80,0,30)
+ bx.Position=UDim2.new(0,92,0,y)
+ bx.BackgroundColor3=Color3.fromRGB(45,45,45)
+ bx.TextColor3=Color3.fromRGB(255,255,255)
+ bx.TextSize=14
+ bx.Text=tostring(get())
+ bx.FocusLost:Connect(function()
+  local n=tonumber(bx.Text)
+  if n then set(n) else bx.Text=tostring(get()) end
+ end)
+end
+
+local flyBtn=newBtn("Fly: OFF",8,8,164)
+flyBtn.MouseButton1Click:Connect(function()
+ fly=not fly
+ flyBtn.Text=fly and "Fly: ON" or "Fly: OFF"
+ flyBtn.BackgroundColor3=fly and Color3.fromRGB(40,120,40) or Color3.fromRGB(45,45,45)
+ if fly then
+  if not hrp then flyBtn.Text="Fly: wait char" fly=false return end
+  if bv then bv:Destroy() end
+  bv=Instance.new("BodyVelocity")
+  bv.MaxForce=Vector3.new(0,9e9,0)
+  bv.Velocity=Vector3.zero
+  bv.Parent=hrp
+ else
+  if bv then bv:Destroy() bv=nil end
+ end
+end)
+
+local autoBtn=newBtn("Auto Attack: OFF",8,46,164)
+autoBtn.MouseButton1Click:Connect(function()
+ auto=not auto
+ autoBtn.Text=auto and "Auto Attack: ON" or "Auto Attack: OFF"
+ autoBtn.BackgroundColor3=auto and Color3.fromRGB(40,120,40) or Color3.fromRGB(45,45,45)
+end)
+
+local upBtn=newBtn("UP",8,84,80)
+local dnBtn=newBtn("DOWN",92,84,80)
+local function hold(b,fn)
+ b.InputBegan:Connect(function(i)
+  if i.UserInputType==Enum.UserInputType.Touch or i.UserInputType==Enum.UserInputType.MouseButton1 then fn(true) end
+ end)
+ b.InputEnded:Connect(function(i)
+  if i.UserInputType==Enum.UserInputType.Touch or i.UserInputType==Enum.UserInputType.MouseButton1 then fn(false) end
+ end)
+end
+hold(upBtn,function(v) up=v end)
+hold(dnBtn,function(v) down=v end)
+
+newBox("WalkSpeed",126,function() return WS end,function(n) WS=n end)
+newBox("JumpPower",162,function() return JP end,function(n) JP=n end)
+newBox("FlySpeed",198,function() return FS end,function(n) FS=n end)
+
+print("[MH] gui ok")
+
+-- ================= CHARACTER (chay nen, khong chan GUI) =================
+task.spawn(function()
+ local function hook(c)
+  char=c
+  hrp=c:WaitForChild("HumanoidRootPart",10)
+  hum=c:WaitForChild("Humanoid",10)
+  pcall(function() hum.UseJumpPower=true end)
+ end
+ hook(plr.Character or plr.CharacterAdded:Wait())
+ plr.CharacterAdded:Connect(function(c)
+  fly=false
+  if bv then bv:Destroy() bv=nil end
+  flyBtn.Text="Fly: OFF"
+  flyBtn.BackgroundColor3=Color3.fromRGB(45,45,45)
+  hook(c)
+ end)
+ print("[MH] char ok")
+end)
+
+-- ================= LOOPS =================
+RS.Heartbeat:Connect(function()
+ if hum and hum.Health>0 then
+  pcall(function() hum.WalkSpeed=WS hum.JumpPower=JP end)
+ end
+end)
+
+RS.RenderStepped:Connect(function()
+ if fly and bv then
+  local y=0
+  if up then y=FS elseif down then y=-FS end
+  bv.Velocity=Vector3.new(0,y,0)
+ end
+end)
+
+task.spawn(function()
+ while true do
+  if auto and char then
+   local t=char:FindFirstChildOfClass("Tool")
+   if t then pcall(function() t:Activate() end) end
+  end
+  task.wait(0.25)
+ end
+end)
+
+print("[MH] loaded")
