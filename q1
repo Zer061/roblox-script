@@ -3,7 +3,7 @@ print("[MH] start")
 local P=game:GetService("Players")
 local RS=game:GetService("RunService")
 local plr=P.LocalPlayer
-local WS,JP,FS=16,50,60
+local WS,JP,FS,AD=16,50,60,0.25
 local fly,auto,up,down=false,false,false,false
 local char,hrp,hum,bv
 
@@ -15,7 +15,7 @@ sg.DisplayOrder=999
 sg.Parent=game:GetService("CoreGui")
 
 local F=Instance.new("Frame",sg)
-F.Size=UDim2.new(0,180,0,240)
+F.Size=UDim2.new(0,180,0,278)
 F.Position=UDim2.new(0,10,0,120)
 F.BackgroundColor3=Color3.fromRGB(25,25,25)
 
@@ -92,6 +92,7 @@ hold(dnBtn,function(v) down=v end)
 newBox("WalkSpeed",126,function() return WS end,function(n) WS=n end)
 newBox("JumpPower",162,function() return JP end,function(n) JP=n end)
 newBox("FlySpeed",198,function() return FS end,function(n) FS=n end)
+newBox("AtkDelay",234,function() return AD end,function(n) AD=math.max(0.03,n) end)
 
 print("[MH] gui ok")
 
@@ -135,7 +136,7 @@ task.spawn(function()
    local t=char:FindFirstChildOfClass("Tool")
    if t then pcall(function() t:Activate() end) end
   end
-  task.wait(0.25)
+  task.wait(AD)
  end
 end)
 
