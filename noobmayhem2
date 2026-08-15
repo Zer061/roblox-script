@@ -311,6 +311,7 @@ local hoverHeight = 14 -- bay cao hơn mục tiêu bấy nhiêu studs
 
 -- Chế độ gây damage: HP=0 (nhanh, KHONG duoc coin) hoặc vũ khí (chậm hơn, có coin)
 local useWeapon = false
+local softenFirst = false -- gọt máu còn 1 trước khi bắn
 local standoffDistance = keepDistance -- khoảng cách đang thực sự dùng
 local standoffHeight = hoverHeight
 
@@ -573,7 +574,11 @@ local function getTargetRoot(humanoid)
 		blacklist[model] = nil
 	end
 
-	return model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+	-- mob bay hay không có HumanoidRootPart lẫn PrimaryPart -> lấy tạm part bất kỳ,
+	-- không thì chúng bị bỏ qua hoàn toàn khi chọn mục tiêu
+	return model:FindFirstChild("HumanoidRootPart")
+		or model.PrimaryPart
+		or model:FindFirstChildWhichIsA("BasePart", true)
 end
 
 -- Quét 1 lần, trả về danh sách mục tiêu hợp lệ trong tầm
@@ -639,6 +644,16 @@ local function getEquippedTool(character, humanoid)
 	end
 
 	return character:FindFirstChildOfClass("Tool")
+end
+
+-- Gọt máu xuống 1 chứ không phải 0: mục tiêu vẫn sống,
+-- phát kết liễu phải do vũ khí thật thì server mới ghi công cho mình
+local function softenTarget(targetModel)
+	local humanoid = targetModel and targetModel:FindFirstChildOfClass("Humanoid")
+
+	if humanoid and humanoid.Health > 1 then
+		humanoid.Health = 1
+	end
 end
 
 -- Súng loại giữ chuột: phải GIỮ nút xuống, nhấn-nhả trong 1 frame game không đọc kịp.
@@ -840,6 +855,10 @@ local function attackStep()
 	local tool = getEquippedTool(player.Character, humanoid)
 
 	if tool then
+		if softenFirst then
+			softenTarget(targetRoot.Parent)
+		end
+
 		fireWeapon(tool, targetRoot)
 	end
 end
@@ -883,30 +902,39 @@ local function setKeepDistance(value)
 	refreshStandoff()
 end
 
-local function setUseWeapon(state)
-	useWeapon = state
+-- 3 chế độ: 1 = HP về 0 (nhanh, không coin), 2 = vũ khí thuần,
+-- 3 = gọt máu còn 1 rồi để vũ khí kết liễu (nhanh mà vẫn được ghi công kill)
+local damageMode = 1
 
-	if useWeapon then
-		modeToggle.Text = "DMG: VU KHI (co coin)"
-		modeToggle.BackgroundColor3 = Color3.fromRGB(45, 170, 75)
+local function setDamageMode(mode)
+	damageMode = ((mode - 1) % 3) + 1
+	useWeapon = damageMode >= 2
+	softenFirst = damageMode == 3
 
-		-- tắt luôn kill HP=0, không thì nó cướp mạng mà chẳng ra coin
-		if enabled then
-			enabled = false
-			toggle.Text = "NOOB KILL: OFF"
-			toggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
-		end
-	else
+	if damageMode == 1 then
 		modeToggle.Text = "DMG: HP=0 (khong coin)"
 		modeToggle.BackgroundColor3 = Color3.fromRGB(120, 90, 40)
 		releaseMouse()
+	elseif damageMode == 2 then
+		modeToggle.Text = "DMG: VU KHI (co coin)"
+		modeToggle.BackgroundColor3 = Color3.fromRGB(45, 170, 75)
+	else
+		modeToggle.Text = "DMG: HP=1 + VU KHI"
+		modeToggle.BackgroundColor3 = Color3.fromRGB(45, 130, 190)
+	end
+
+	-- 2 chế độ sau cần phát cuối là của mình, nên tắt kill HP=0 đang chạy nền
+	if useWeapon and enabled then
+		enabled = false
+		toggle.Text = "NOOB KILL: OFF"
+		toggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
 	end
 
 	refreshStandoff()
 end
 
 modeToggle.MouseButton1Click:Connect(function()
-	setUseWeapon(not useWeapon)
+	setDamageMode(damageMode + 1)
 end)
 
 -- Chỉ khai hoả, để Auto Farm lo phần di chuyển
@@ -931,6 +959,10 @@ local function farmSwing()
 		statusLabel.Text = "Khong tim thay Tool!"
 		releaseMouse()
 		return
+	end
+
+	if softenFirst then
+		softenTarget(aimTarget.Parent)
 	end
 
 	fireWeapon(tool, aimTarget)
@@ -1105,6 +1137,10 @@ local function farmStep()
 		if not tool then
 			statusLabel.Text = "Khong tim thay Tool!"
 		elseif distance <= attackRange then
+			if softenFirst then
+				softenTarget(farmTargetModel)
+			end
+
 			fireWeapon(tool, targetRoot)
 		end
 	else
@@ -1313,7 +1349,45 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	elseif input.KeyCode == Enum.KeyCode.J then
 		setFullbright(not fullbright)
 	elseif input.KeyCode == Enum.KeyCode.K then
-		setUseWeapon(not useWeapon)
+		setDamageMode(damageMode + 1)
+	elseif input.KeyCode == Enum.KeyCode.N then
+		-- soi mob quanh mình: máu nằm ở đâu, có bị anchored không (xem console F9)
+		local root = getCharacterParts()
+
+		if not root then
+			return
+		end
+
+		print("===== MOB QUANH DAY =====")
+
+		local shown = 0
+
+		for _, model in ipairs(Workspace:GetDescendants()) do
+			if shown < 15 and model:IsA("Model") and model ~= player.Character then
+				local part = model.PrimaryPart or model:FindFirstChildWhichIsA("BasePart", true)
+
+				if part and (part.Position - root.Position).Magnitude <= 150 then
+					local humanoid = model:FindFirstChildOfClass("Humanoid")
+					local health = humanoid and (humanoid.Health .. "/" .. humanoid.MaxHealth) or "KHONG CO Humanoid"
+
+					print(model:GetFullName(), "| HP:", health, "| Anchored:", part.Anchored)
+
+					for name, value in pairs(model:GetAttributes()) do
+						print("   attribute", name, "=", value)
+					end
+
+					for _, child in ipairs(model:GetChildren()) do
+						if child:IsA("IntValue") or child:IsA("NumberValue") then
+							print("   value", child.Name, "=", child.Value)
+						end
+					end
+
+					shown += 1
+				end
+			end
+		end
+
+		print("=========================")
 	elseif input.KeyCode == Enum.KeyCode.L then
 		-- liệt kê remote để biết game gửi damage qua đâu (xem ở console F9)
 		print("===== REMOTE =====")
