@@ -1,8 +1,6 @@
---[[
-	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
-]]
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
+local Lighting = game:GetService("Lighting")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 
@@ -14,8 +12,8 @@ gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 200, 0, 312)
-frame.Position = UDim2.new(0.5, -100, 0.5, -156)
+frame.Size = UDim2.new(0, 200, 0, 384)
+frame.Position = UDim2.new(0.5, -100, 0.5, -192)
 frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -92,9 +90,24 @@ rangeLabel.Parent = frame
 
 local farmToggle = makeButton("AUTO FARM: OFF", UDim2.new(0, 10, 0, 248), UDim2.new(1, -20, 0, 30), Color3.fromRGB(170, 45, 45))
 
+local keepDown = makeButton("-", UDim2.new(0, 10, 0, 284), UDim2.new(0, 34, 0, 28), Color3.fromRGB(50, 50, 50))
+local keepUp = makeButton("+", UDim2.new(1, -44, 0, 284), UDim2.new(0, 34, 0, 28), Color3.fromRGB(50, 50, 50))
+
+local keepLabel = Instance.new("TextLabel")
+keepLabel.Size = UDim2.new(1, -96, 0, 28)
+keepLabel.Position = UDim2.new(0, 48, 0, 284)
+keepLabel.BackgroundTransparency = 1
+keepLabel.Text = "Keep: 18"
+keepLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+keepLabel.TextSize = 14
+keepLabel.Font = Enum.Font.GothamBold
+keepLabel.Parent = frame
+
+local brightToggle = makeButton("FULLBRIGHT: OFF", UDim2.new(0, 10, 0, 320), UDim2.new(1, -20, 0, 30), Color3.fromRGB(170, 45, 45))
+
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -20, 0, 20)
-statusLabel.Position = UDim2.new(0, 10, 0, 284)
+statusLabel.Position = UDim2.new(0, 10, 0, 356)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Text = "Target: none"
 statusLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
@@ -159,7 +172,10 @@ local holdingDown = false
 local aimTarget = nil -- được Auto Attack / Auto Farm set, dùng chung với BodyGyro khi đang bay
 local autoFarm = false
 local farmDestination = nil -- Vector3 điểm bay tới khi đang farm
-local farmHoverDistance = 8 -- tới gần hơn mức này thì đứng yên đánh
+local farmAwayDir = nil -- hướng đứng so với mục tiêu, tính lại mỗi tick farm
+local farmHoverDistance = 2 -- sai số cho phép quanh điểm đứng
+local keepDistance = 18 -- khoảng cách ngang luôn giữ với mục tiêu
+local hoverHeight = 14 -- bay cao hơn mục tiêu bấy nhiêu studs
 
 local bodyVelocity, bodyGyro, flyConnection
 
@@ -186,13 +202,22 @@ local function getFlyDirection(root, humanoid)
 
 	-- Auto Farm lái thay người chơi
 	if autoFarm and farmDestination then
-		local offset = farmDestination - root.Position
+		local destination = farmDestination
 
-		if offset.Magnitude <= farmHoverDistance then
+		-- bám mục tiêu theo từng frame, không đợi tick farm 0.4s
+		if farmAwayDir and aimTarget and aimTarget.Parent then
+			destination = aimTarget.Position + farmAwayDir * keepDistance + Vector3.new(0, hoverHeight, 0)
+		end
+
+		local offset = destination - root.Position
+		local distance = offset.Magnitude
+
+		if distance <= farmHoverDistance then
 			return Vector3.zero
 		end
 
-		return offset.Unit
+		-- giảm tốc khi tới gần điểm đứng để không vọt qua rồi dao động
+		return offset.Unit * math.clamp(distance / 12, 0.08, 1)
 	end
 
 	if camera then
@@ -532,6 +557,20 @@ rangeDown.MouseButton1Click:Connect(function()
 	setRange(attackRange - 10)
 end)
 
+local function setKeepDistance(value)
+	keepDistance = math.clamp(value, 4, 120)
+	hoverHeight = math.clamp(keepDistance * 0.8, 6, 60)
+	keepLabel.Text = "Keep: " .. keepDistance
+end
+
+keepUp.MouseButton1Click:Connect(function()
+	setKeepDistance(keepDistance + 2)
+end)
+
+keepDown.MouseButton1Click:Connect(function()
+	setKeepDistance(keepDistance - 2)
+end)
+
 task.spawn(function()
 	while gui.Parent do
 		if autoAttacking then
@@ -583,6 +622,39 @@ local function pickCluster(root)
 	return best
 end
 
+-- Hướng đứng so với mục tiêu: giữ phía hiện tại, cộng lực đẩy khỏi đám đang áp sát
+local function computeAwayDirection(root, targetRoot)
+	local myPos = root.Position
+	local targetPos = targetRoot.Position
+
+	-- giữ nguyên phía mình đang đứng so với mục tiêu, khỏi bay vòng vô nghĩa
+	local away = (myPos - targetPos) * Vector3.new(1, 0, 1)
+
+	away = away.Magnitude > 0.5 and away.Unit or Vector3.new(1, 0, 0)
+
+	-- lực đẩy khỏi mọi noob đang lọt vào vùng an toàn
+	local push = Vector3.zero
+
+	for _, other in ipairs(collectTargets(root, keepDistance * 2)) do
+		local offset = (myPos - other.root.Position) * Vector3.new(1, 0, 1)
+		local distance = offset.Magnitude
+
+		if distance > 0.5 and distance < keepDistance then
+			push += offset.Unit * ((keepDistance - distance) / keepDistance)
+		end
+	end
+
+	if push.Magnitude > 0 then
+		local blended = away + push * 1.5
+
+		if blended.Magnitude > 0.1 then
+			away = blended.Unit
+		end
+	end
+
+	return away
+end
+
 local function farmStep()
 	local root, humanoid = getCharacterParts()
 
@@ -613,7 +685,7 @@ local function farmStep()
 		local pick = pickCluster(root)
 
 		if not pick then
-			farmTargetModel, farmDestination, aimTarget = nil, nil, nil
+			farmTargetModel, farmDestination, farmAwayDir, aimTarget = nil, nil, nil, nil
 			statusLabel.Text = "Farm: khong thay muc tieu"
 			return
 		end
@@ -629,13 +701,14 @@ local function farmStep()
 		return
 	end
 
-	farmDestination = targetRoot.Position + Vector3.new(0, 6, 0)
+	farmAwayDir = computeAwayDirection(root, targetRoot)
+	farmDestination = targetRoot.Position + farmAwayDir * keepDistance + Vector3.new(0, hoverHeight, 0)
 	aimTarget = targetRoot
 
 	local distance = (targetRoot.Position - root.Position).Magnitude
 	statusLabel.Text = string.format("Farm: %s (%.0f)", farmTargetModel.Name, distance)
 
-	-- tới gần nên đã có network ownership, kill mới ăn
+	-- đủ gần để có network ownership thì kill mới ăn, không cần áp sát
 	killNoobs()
 
 	if distance <= attackRange then
@@ -658,6 +731,7 @@ local function setAutoFarm(state)
 		farmToggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
 		farmTargetModel = nil
 		farmDestination = nil
+		farmAwayDir = nil
 		aimTarget = nil
 		statusLabel.Text = "Target: none"
 	end
@@ -681,6 +755,93 @@ task.spawn(function()
 	end
 end)
 
+-- ===== FULLBRIGHT =====
+
+local fullbright = false
+local lightingBackup = nil
+local atmosphereBackup = {}
+
+local function applyFullbright()
+	Lighting.Ambient = Color3.fromRGB(178, 178, 178)
+	Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
+	Lighting.Brightness = 2
+	Lighting.ClockTime = 14
+	Lighting.FogEnd = 1e6
+	Lighting.FogStart = 1e6
+	Lighting.GlobalShadows = false
+	Lighting.ExposureCompensation = 0
+
+	for _, object in ipairs(Lighting:GetChildren()) do
+		if object:IsA("Atmosphere") then
+			if not atmosphereBackup[object] then
+				atmosphereBackup[object] = {
+					Density = object.Density,
+					Haze = object.Haze,
+				}
+			end
+
+			object.Density = 0
+			object.Haze = 0
+		end
+	end
+end
+
+local function setFullbright(state)
+	fullbright = state
+
+	if fullbright then
+		-- lưu lại thiết lập gốc đúng 1 lần để còn trả về
+		lightingBackup = lightingBackup or {
+			Ambient = Lighting.Ambient,
+			OutdoorAmbient = Lighting.OutdoorAmbient,
+			Brightness = Lighting.Brightness,
+			ClockTime = Lighting.ClockTime,
+			FogEnd = Lighting.FogEnd,
+			FogStart = Lighting.FogStart,
+			GlobalShadows = Lighting.GlobalShadows,
+			ExposureCompensation = Lighting.ExposureCompensation,
+		}
+
+		applyFullbright()
+
+		brightToggle.Text = "FULLBRIGHT: ON"
+		brightToggle.BackgroundColor3 = Color3.fromRGB(45, 170, 75)
+	else
+		if lightingBackup then
+			for property, value in pairs(lightingBackup) do
+				Lighting[property] = value
+			end
+		end
+
+		for object, values in pairs(atmosphereBackup) do
+			if object.Parent then
+				object.Density = values.Density
+				object.Haze = values.Haze
+			end
+		end
+
+		atmosphereBackup = {}
+
+		brightToggle.Text = "FULLBRIGHT: OFF"
+		brightToggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+	end
+end
+
+brightToggle.MouseButton1Click:Connect(function()
+	setFullbright(not fullbright)
+end)
+
+-- game tự chỉnh lại lighting (ngày/đêm, hiệu ứng) thì ép sáng lại
+task.spawn(function()
+	while gui.Parent do
+		if fullbright then
+			pcall(applyFullbright)
+		end
+
+		task.wait(1)
+	end
+end)
+
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed or UserInputService:GetFocusedTextBox() then
 		return
@@ -692,12 +853,15 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		setAutoAttack(not autoAttacking)
 	elseif input.KeyCode == Enum.KeyCode.H then
 		setAutoFarm(not autoFarm)
+	elseif input.KeyCode == Enum.KeyCode.J then
+		setFullbright(not fullbright)
 	end
 end)
 
 player.CharacterAdded:Connect(function()
 	aimTarget = nil
 	farmDestination = nil
+	farmAwayDir = nil
 	farmTargetModel = nil
 
 	if flying then
@@ -714,4 +878,11 @@ player.CharacterAdded:Connect(function()
 	end
 end)
 
-gui.Destroying:Connect(stopFly)
+gui.Destroying:Connect(function()
+	stopFly()
+
+	-- trả lighting về gốc, khỏi để map sáng trắng sau khi tắt script
+	if fullbright then
+		setFullbright(false)
+	end
+end)
