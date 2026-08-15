@@ -614,29 +614,128 @@ local function getEquippedTool(character, humanoid)
 	return character:FindFirstChildOfClass("Tool")
 end
 
--- Súng thường nghe Mouse.Button1Down chứ không phải Tool.Activated,
--- nên phải giả lập click chuột thật vào đúng vị trí mục tiêu trên màn hình.
+-- Súng loại giữ chuột: phải GIỮ nút xuống, nhấn-nhả trong 1 frame game không đọc kịp.
 local GuiService = game:GetService("GuiService")
-local virtualUser = nil
+local virtualUser, virtualInput
 
 pcall(function()
 	virtualUser = game:GetService("VirtualUser")
 end)
 
+pcall(function()
+	virtualInput = game:GetService("VirtualInputManager")
+end)
+
 local fireMethod = "?"
 local aimCameraAtTarget = true -- đặt false nếu không muốn camera bị giật về mục tiêu
+local mouseHeld = false
+local heldMethod = nil
+local lastFireRequest = 0
+
+local function executorGlobal(name)
+	local value
+
+	pcall(function()
+		local env = (getgenv and getgenv()) or getfenv()
+		value = rawget(env, name)
+	end)
+
+	if type(value) == "function" then
+		return value
+	end
+
+	return nil
+end
+
+local function moveVirtualMouse(screenPoint)
+	local moveMouse = executorGlobal("mousemoveabs")
+
+	if moveMouse then
+		pcall(moveMouse, screenPoint.X, screenPoint.Y)
+		return
+	end
+
+	if virtualInput then
+		pcall(function()
+			virtualInput:SendMouseMoveEvent(screenPoint.X, screenPoint.Y, game)
+		end)
+	end
+end
+
+local function holdMouse(screenPoint, cameraCFrame)
+	moveVirtualMouse(screenPoint)
+
+	if mouseHeld then
+		return -- đang giữ rồi, không nhấn lại kẻo thành nhả
+	end
+
+	local press = executorGlobal("mouse1press")
+
+	if press and pcall(press) then
+		mouseHeld, heldMethod, fireMethod = true, "executor", "mouse1press(giu)"
+		return
+	end
+
+	if virtualInput then
+		local ok = pcall(function()
+			virtualInput:SendMouseButtonEvent(screenPoint.X, screenPoint.Y, 0, true, game, 1)
+		end)
+
+		if ok then
+			mouseHeld, heldMethod, fireMethod = true, "vim", "VIM(giu)"
+			return
+		end
+	end
+
+	if virtualUser then
+		local ok = pcall(function()
+			virtualUser:Button1Down(screenPoint, cameraCFrame)
+		end)
+
+		if ok then
+			mouseHeld, heldMethod, fireMethod = true, "virtualuser", "VirtualUser(giu)"
+		end
+	end
+end
+
+local function releaseMouse()
+	if not mouseHeld then
+		return
+	end
+
+	local camera = Workspace.CurrentCamera
+	local screenPoint = camera and camera.ViewportSize / 2 or Vector2.new(0, 0)
+
+	if heldMethod == "executor" then
+		local release = executorGlobal("mouse1release")
+
+		if release then
+			pcall(release)
+		end
+	elseif heldMethod == "vim" and virtualInput then
+		pcall(function()
+			virtualInput:SendMouseButtonEvent(screenPoint.X, screenPoint.Y, 0, false, game, 1)
+		end)
+	elseif heldMethod == "virtualuser" and virtualUser then
+		pcall(function()
+			virtualUser:Button1Up(screenPoint, camera and camera.CFrame or CFrame.new())
+		end)
+	end
+
+	mouseHeld = false
+	heldMethod = nil
+end
 
 local function fireWeapon(tool, targetRoot)
-	-- Tầng 1: cách chuẩn của Roblox
-	local activated = pcall(function()
+	lastFireRequest = os.clock()
+
+	-- Tool loại Activated vẫn dùng được, gọi song song cũng không hại
+	pcall(function()
 		tool:Activate()
 	end)
 
-	if activated then
-		fireMethod = "Activate"
-	end
-
 	if not targetRoot then
+		releaseMouse()
 		return
 	end
 
@@ -656,47 +755,27 @@ local function fireWeapon(tool, targetRoot)
 	local point, onScreen = camera:WorldToViewportPoint(targetRoot.Position)
 
 	if not onScreen then
-		return -- mục tiêu ngoài màn hình thì click cũng vô nghĩa
+		releaseMouse() -- mục tiêu ra khỏi màn hình thì thả súng
+		return
 	end
 
 	local inset = GuiService:GetGuiInset()
-	local screenPoint = Vector2.new(point.X, point.Y + inset.Y)
 
-	-- Tầng 2: VirtualUser (executor nào cũng có)
-	if virtualUser then
-		local ok = pcall(function()
-			virtualUser:Button1Down(screenPoint, camera.CFrame)
-			virtualUser:Button1Up(screenPoint, camera.CFrame)
-		end)
-
-		if ok then
-			fireMethod = "VirtualUser"
-			return
-		end
-	end
-
-	-- Tầng 3: hàm click gốc của executor
-	local moveMouse, clickMouse
-
-	pcall(function()
-		local env = (getgenv and getgenv()) or getfenv()
-		moveMouse = rawget(env, "mousemoveabs")
-		clickMouse = rawget(env, "mouse1click")
-	end)
-
-	if type(clickMouse) == "function" then
-		pcall(function()
-			if type(moveMouse) == "function" then
-				moveMouse(screenPoint.X, screenPoint.Y)
-				task.wait()
-			end
-
-			clickMouse()
-		end)
-
-		fireMethod = "mouse1click"
-	end
+	holdMouse(Vector2.new(point.X, point.Y + inset.Y), camera.CFrame)
 end
+
+-- Không ai gọi fireWeapon nữa (hết mục tiêu / tắt farm / chết) thì tự nhả chuột
+task.spawn(function()
+	while gui.Parent do
+		if mouseHeld and os.clock() - lastFireRequest > 0.5 then
+			releaseMouse()
+		end
+
+		task.wait(0.2)
+	end
+
+	releaseMouse()
+end)
 
 local function attackStep()
 	if autoFarm or retreating then
@@ -747,6 +826,7 @@ local function setAutoAttack(state)
 	else
 		attackToggle.Text = "AUTO ATK: OFF"
 		attackToggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+		releaseMouse()
 		aimTarget = nil
 		statusLabel.Text = "Target: none"
 	end
@@ -792,6 +872,7 @@ local function setUseWeapon(state)
 	else
 		modeToggle.Text = "DMG: HP=0 (khong coin)"
 		modeToggle.BackgroundColor3 = Color3.fromRGB(120, 90, 40)
+		releaseMouse()
 	end
 
 	refreshStandoff()
@@ -821,6 +902,7 @@ local function farmSwing()
 
 	if not tool then
 		statusLabel.Text = "Khong tim thay Tool!"
+		releaseMouse()
 		return
 	end
 
@@ -1021,6 +1103,7 @@ local function setAutoFarm(state)
 	else
 		farmToggle.Text = "AUTO FARM: OFF"
 		farmToggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+		releaseMouse()
 		farmTargetModel = nil
 		farmDestination = nil
 		farmAwayDir = nil
@@ -1069,6 +1152,7 @@ local function retreatStep()
 			retreating = true
 			retreatAnchor = root.Position + Vector3.new(0, retreatAltitude, 0)
 			aimTarget = nil
+			releaseMouse()
 
 			if not flying then
 				startFly()
@@ -1235,6 +1319,7 @@ player.CharacterAdded:Connect(function()
 	farmTargetModel = nil
 	retreating = false
 	retreatAnchor = nil
+	releaseMouse()
 
 	if flying then
 		stopFly()
@@ -1252,6 +1337,7 @@ end)
 
 gui.Destroying:Connect(function()
 	stopFly()
+	releaseMouse()
 
 	-- trả lighting về gốc, khỏi để map sáng trắng sau khi tắt script
 	if fullbright then
