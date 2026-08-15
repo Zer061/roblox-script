@@ -3,6 +3,8 @@
 ]]
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
 local player = Players.LocalPlayer
 
@@ -12,8 +14,8 @@ gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 190, 0, 70)
-frame.Position = UDim2.new(0.5, -95, 0.5, -35)
+frame.Size = UDim2.new(0, 200, 0, 182)
+frame.Position = UDim2.new(0.5, -100, 0.5, -91)
 frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -33,20 +35,45 @@ title.TextSize = 16
 title.Font = Enum.Font.GothamBold
 title.Parent = frame
 
-local toggle = Instance.new("TextButton")
-toggle.Size = UDim2.new(1, -20, 0, 30)
-toggle.Position = UDim2.new(0, 10, 0, 32)
-toggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
-toggle.BorderSizePixel = 0
-toggle.Text = "OFF"
-toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
-toggle.TextSize = 14
-toggle.Font = Enum.Font.GothamBold
-toggle.Parent = frame
+local function makeButton(text, position, size, color)
+	local button = Instance.new("TextButton")
+	button.Size = size
+	button.Position = position
+	button.BackgroundColor3 = color
+	button.BorderSizePixel = 0
+	button.Text = text
+	button.TextColor3 = Color3.fromRGB(255, 255, 255)
+	button.TextSize = 14
+	button.Font = Enum.Font.GothamBold
+	button.AutoButtonColor = true
+	button.Parent = frame
 
-local toggleCorner = Instance.new("UICorner")
-toggleCorner.CornerRadius = UDim.new(0, 7)
-toggleCorner.Parent = toggle
+	local buttonCorner = Instance.new("UICorner")
+	buttonCorner.CornerRadius = UDim.new(0, 7)
+	buttonCorner.Parent = button
+
+	return button
+end
+
+local toggle = makeButton("OFF", UDim2.new(0, 10, 0, 32), UDim2.new(1, -20, 0, 30), Color3.fromRGB(170, 45, 45))
+
+local flyToggle = makeButton("FLY: OFF", UDim2.new(0, 10, 0, 68), UDim2.new(1, -20, 0, 30), Color3.fromRGB(170, 45, 45))
+
+local speedDown = makeButton("-", UDim2.new(0, 10, 0, 104), UDim2.new(0, 34, 0, 28), Color3.fromRGB(50, 50, 50))
+local speedUp = makeButton("+", UDim2.new(1, -44, 0, 104), UDim2.new(0, 34, 0, 28), Color3.fromRGB(50, 50, 50))
+
+local speedLabel = Instance.new("TextLabel")
+speedLabel.Size = UDim2.new(1, -96, 0, 28)
+speedLabel.Position = UDim2.new(0, 48, 0, 104)
+speedLabel.BackgroundTransparency = 1
+speedLabel.Text = "Speed: 60"
+speedLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+speedLabel.TextSize = 14
+speedLabel.Font = Enum.Font.GothamBold
+speedLabel.Parent = frame
+
+local upButton = makeButton("UP", UDim2.new(0, 10, 0, 140), UDim2.new(0.5, -14, 0, 30), Color3.fromRGB(50, 50, 50))
+local downButton = makeButton("DOWN", UDim2.new(0.5, 4, 0, 140), UDim2.new(0.5, -14, 0, 30), Color3.fromRGB(50, 50, 50))
 
 local enabled = false
 
@@ -94,3 +121,212 @@ task.spawn(function()
 		task.wait(0.15)
 	end
 end)
+
+-- ===== FLY =====
+
+local flying = false
+local flySpeed = 60
+local holdingUp = false
+local holdingDown = false
+
+local bodyVelocity, bodyGyro, flyConnection
+
+local function getCharacterParts()
+	local character = player.Character
+
+	if not character then
+		return nil
+	end
+
+	local root = character:FindFirstChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+	if not root or not humanoid or humanoid.Health <= 0 then
+		return nil
+	end
+
+	return root, humanoid
+end
+
+local function getFlyDirection(humanoid)
+	local camera = Workspace.CurrentCamera
+	local direction = Vector3.zero
+
+	if camera then
+		local cf = camera.CFrame
+
+		if UserInputService.KeyboardEnabled and not UserInputService:GetFocusedTextBox() then
+			if UserInputService:IsKeyDown(Enum.KeyCode.W) then
+				direction += cf.LookVector
+			end
+			if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+				direction -= cf.LookVector
+			end
+			if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+				direction -= cf.RightVector
+			end
+			if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+				direction += cf.RightVector
+			end
+		end
+	end
+
+	-- Mobile joystick / gamepad fallback
+	if direction.Magnitude == 0 then
+		direction = humanoid.MoveDirection
+	end
+
+	if holdingUp or UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+		direction += Vector3.new(0, 1, 0)
+	end
+	if holdingDown or UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+		direction -= Vector3.new(0, 1, 0)
+	end
+
+	if direction.Magnitude > 0 then
+		return direction.Unit
+	end
+
+	return Vector3.zero
+end
+
+local function stopFly()
+	flying = false
+
+	if flyConnection then
+		flyConnection:Disconnect()
+		flyConnection = nil
+	end
+
+	if bodyVelocity then
+		bodyVelocity:Destroy()
+		bodyVelocity = nil
+	end
+
+	if bodyGyro then
+		bodyGyro:Destroy()
+		bodyGyro = nil
+	end
+
+	local _, humanoid = getCharacterParts()
+
+	if humanoid then
+		humanoid.PlatformStand = false
+	end
+
+	flyToggle.Text = "FLY: OFF"
+	flyToggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+end
+
+local function startFly()
+	local root, humanoid = getCharacterParts()
+
+	if not root then
+		return
+	end
+
+	flying = true
+
+	bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.Name = "FlyVelocity"
+	bodyVelocity.MaxForce = Vector3.new(1, 1, 1) * 9e9
+	bodyVelocity.P = 9e4
+	bodyVelocity.Velocity = Vector3.zero
+	bodyVelocity.Parent = root
+
+	bodyGyro = Instance.new("BodyGyro")
+	bodyGyro.Name = "FlyGyro"
+	bodyGyro.MaxTorque = Vector3.new(1, 1, 1) * 9e9
+	bodyGyro.P = 9e4
+	bodyGyro.D = 500
+	bodyGyro.CFrame = root.CFrame
+	bodyGyro.Parent = root
+
+	flyToggle.Text = "FLY: ON"
+	flyToggle.BackgroundColor3 = Color3.fromRGB(45, 170, 75)
+
+	flyConnection = RunService.RenderStepped:Connect(function()
+		local currentRoot, currentHumanoid = getCharacterParts()
+
+		if not currentRoot or currentRoot ~= root then
+			stopFly()
+			return
+		end
+
+		-- Không rơi khi đứng yên
+		currentHumanoid:ChangeState(Enum.HumanoidStateType.Freefall)
+
+		bodyVelocity.Velocity = getFlyDirection(currentHumanoid) * flySpeed
+
+		local camera = Workspace.CurrentCamera
+
+		if camera then
+			local look = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
+
+			if look.Magnitude > 0 then
+				bodyGyro.CFrame = CFrame.lookAt(currentRoot.Position, currentRoot.Position + look.Unit)
+			end
+		end
+	end)
+end
+
+local function toggleFly()
+	if flying then
+		stopFly()
+	else
+		startFly()
+	end
+end
+
+flyToggle.MouseButton1Click:Connect(toggleFly)
+
+local function bindHold(button, setter)
+	button.MouseButton1Down:Connect(function()
+		setter(true)
+	end)
+	button.MouseButton1Up:Connect(function()
+		setter(false)
+	end)
+	button.MouseLeave:Connect(function()
+		setter(false)
+	end)
+end
+
+bindHold(upButton, function(state)
+	holdingUp = state
+end)
+
+bindHold(downButton, function(state)
+	holdingDown = state
+end)
+
+local function setSpeed(value)
+	flySpeed = math.clamp(value, 10, 500)
+	speedLabel.Text = "Speed: " .. flySpeed
+end
+
+speedUp.MouseButton1Click:Connect(function()
+	setSpeed(flySpeed + 10)
+end)
+
+speedDown.MouseButton1Click:Connect(function()
+	setSpeed(flySpeed - 10)
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed or UserInputService:GetFocusedTextBox() then
+		return
+	end
+
+	if input.KeyCode == Enum.KeyCode.F then
+		toggleFly()
+	end
+end)
+
+player.CharacterAdded:Connect(function()
+	if flying then
+		stopFly()
+	end
+end)
+
+gui.Destroying:Connect(stopFly)
