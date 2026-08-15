@@ -1,3 +1,6 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+]]
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
@@ -11,8 +14,8 @@ gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 200, 0, 274)
-frame.Position = UDim2.new(0.5, -100, 0.5, -137)
+frame.Size = UDim2.new(0, 200, 0, 312)
+frame.Position = UDim2.new(0.5, -100, 0.5, -156)
 frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -87,9 +90,11 @@ rangeLabel.TextSize = 14
 rangeLabel.Font = Enum.Font.GothamBold
 rangeLabel.Parent = frame
 
+local farmToggle = makeButton("AUTO FARM: OFF", UDim2.new(0, 10, 0, 248), UDim2.new(1, -20, 0, 30), Color3.fromRGB(170, 45, 45))
+
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -20, 0, 20)
-statusLabel.Position = UDim2.new(0, 10, 0, 244)
+statusLabel.Position = UDim2.new(0, 10, 0, 284)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Text = "Target: none"
 statusLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
@@ -115,7 +120,7 @@ local function killNoobs()
 		if isNoobFolder(object) then
 			for _, descendant in ipairs(object:GetDescendants()) do
 				if descendant:IsA("Humanoid") then
-					descendant.Health = 1
+					descendant.Health = 0
 				end
 			end
 		end
@@ -151,7 +156,10 @@ local flying = false
 local flySpeed = 60
 local holdingUp = false
 local holdingDown = false
-local aimTarget = nil -- được Auto Attack set, dùng chung với BodyGyro khi đang bay
+local aimTarget = nil -- được Auto Attack / Auto Farm set, dùng chung với BodyGyro khi đang bay
+local autoFarm = false
+local farmDestination = nil -- Vector3 điểm bay tới khi đang farm
+local farmHoverDistance = 8 -- tới gần hơn mức này thì đứng yên đánh
 
 local bodyVelocity, bodyGyro, flyConnection
 
@@ -172,9 +180,20 @@ local function getCharacterParts()
 	return root, humanoid
 end
 
-local function getFlyDirection(humanoid)
+local function getFlyDirection(root, humanoid)
 	local camera = Workspace.CurrentCamera
 	local direction = Vector3.zero
+
+	-- Auto Farm lái thay người chơi
+	if autoFarm and farmDestination then
+		local offset = farmDestination - root.Position
+
+		if offset.Magnitude <= farmHoverDistance then
+			return Vector3.zero
+		end
+
+		return offset.Unit
+	end
 
 	if camera then
 		local cf = camera.CFrame
@@ -280,7 +299,7 @@ local function startFly()
 		-- Không rơi khi đứng yên
 		currentHumanoid:ChangeState(Enum.HumanoidStateType.Freefall)
 
-		bodyVelocity.Velocity = getFlyDirection(currentHumanoid) * flySpeed
+		bodyVelocity.Velocity = getFlyDirection(currentRoot, currentHumanoid) * flySpeed
 
 		local look
 
@@ -346,6 +365,8 @@ local autoAttacking = false
 local attackRange = 60
 local attackCooldown = 0.2
 
+local blacklist = {} -- [model] = thời điểm hết hạn, cho mục tiêu không tiếp cận được
+
 local function getTargetRoot(humanoid)
 	if humanoid.Health <= 0 then
 		return nil
@@ -362,11 +383,22 @@ local function getTargetRoot(humanoid)
 		return nil
 	end
 
+	local expiry = blacklist[model]
+
+	if expiry then
+		if os.clock() < expiry then
+			return nil
+		end
+
+		blacklist[model] = nil
+	end
+
 	return model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
 end
 
-local function getNearestTarget(root)
-	local bestRoot, bestName, bestDistance = nil, nil, attackRange
+-- Quét 1 lần, trả về danh sách mục tiêu hợp lệ trong tầm
+local function collectTargets(root, maxDistance)
+	local targets = {}
 
 	for _, object in ipairs(Workspace:GetDescendants()) do
 		if object:IsA("Humanoid") then
@@ -375,14 +407,35 @@ local function getNearestTarget(root)
 			if targetRoot then
 				local distance = (targetRoot.Position - root.Position).Magnitude
 
-				if distance <= bestDistance then
-					bestRoot, bestName, bestDistance = targetRoot, object.Parent.Name, distance
+				if distance <= maxDistance then
+					table.insert(targets, {
+						root = targetRoot,
+						model = object.Parent,
+						name = object.Parent.Name,
+						distance = distance,
+					})
 				end
 			end
 		end
 	end
 
-	return bestRoot, bestName, bestDistance
+	return targets
+end
+
+local function getNearestTarget(root)
+	local best
+
+	for _, target in ipairs(collectTargets(root, attackRange)) do
+		if not best or target.distance < best.distance then
+			best = target
+		end
+	end
+
+	if not best then
+		return nil
+	end
+
+	return best.root, best.name, best.distance
 end
 
 local function getEquippedTool(character, humanoid)
@@ -409,6 +462,10 @@ local function getEquippedTool(character, humanoid)
 end
 
 local function attackStep()
+	if autoFarm then
+		return -- Auto Farm tự lo phần đánh, tránh giành quyền điều khiển
+	end
+
 	local root, humanoid = getCharacterParts()
 
 	if not root then
@@ -489,6 +546,141 @@ task.spawn(function()
 	end
 end)
 
+-- ===== AUTO FARM =====
+
+local farmScanRange = 5000 -- quét toàn map (bị giới hạn bởi streaming nếu game bật)
+local clusterRadius = 40 -- bán kính tính "cụm"
+local farmStuckTimeout = 10 -- bám 1 mục tiêu quá lâu thì bỏ qua
+local farmTargetModel = nil
+local farmTargetSince = 0
+
+-- Chọn mục tiêu thuộc cụm đông nhất, có trừ điểm theo khoảng cách
+local function pickCluster(root)
+	local targets = collectTargets(root, farmScanRange)
+
+	if #targets == 0 then
+		return nil
+	end
+
+	local best, bestScore
+
+	for _, candidate in ipairs(targets) do
+		local count = 0
+
+		for _, other in ipairs(targets) do
+			if (other.root.Position - candidate.root.Position).Magnitude <= clusterRadius then
+				count += 1
+			end
+		end
+
+		local score = count * 3 - candidate.distance / 25
+
+		if not bestScore or score > bestScore then
+			best, bestScore = candidate, score
+		end
+	end
+
+	return best
+end
+
+local function farmStep()
+	local root, humanoid = getCharacterParts()
+
+	if not root then
+		farmDestination = nil
+		return
+	end
+
+	if not flying then
+		startFly()
+	end
+
+	-- mục tiêu hiện tại còn dùng được không?
+	local keepTarget = false
+
+	if farmTargetModel and farmTargetModel.Parent and not blacklist[farmTargetModel] then
+		local targetHumanoid = farmTargetModel:FindFirstChildOfClass("Humanoid")
+		keepTarget = targetHumanoid ~= nil and targetHumanoid.Health > 0
+	end
+
+	-- bám mãi không hạ được (bất tử / không tới nơi) thì bỏ, cấm 20s
+	if keepTarget and os.clock() - farmTargetSince > farmStuckTimeout then
+		blacklist[farmTargetModel] = os.clock() + 20
+		keepTarget = false
+	end
+
+	if not keepTarget then
+		local pick = pickCluster(root)
+
+		if not pick then
+			farmTargetModel, farmDestination, aimTarget = nil, nil, nil
+			statusLabel.Text = "Farm: khong thay muc tieu"
+			return
+		end
+
+		farmTargetModel = pick.model
+		farmTargetSince = os.clock()
+	end
+
+	local targetRoot = farmTargetModel:FindFirstChild("HumanoidRootPart") or farmTargetModel.PrimaryPart
+
+	if not targetRoot then
+		farmTargetModel = nil
+		return
+	end
+
+	farmDestination = targetRoot.Position + Vector3.new(0, 6, 0)
+	aimTarget = targetRoot
+
+	local distance = (targetRoot.Position - root.Position).Magnitude
+	statusLabel.Text = string.format("Farm: %s (%.0f)", farmTargetModel.Name, distance)
+
+	-- tới gần nên đã có network ownership, kill mới ăn
+	killNoobs()
+
+	if distance <= attackRange then
+		local tool = getEquippedTool(player.Character, humanoid)
+
+		if tool then
+			tool:Activate()
+		end
+	end
+end
+
+local function setAutoFarm(state)
+	autoFarm = state
+
+	if autoFarm then
+		farmToggle.Text = "AUTO FARM: ON"
+		farmToggle.BackgroundColor3 = Color3.fromRGB(45, 170, 75)
+	else
+		farmToggle.Text = "AUTO FARM: OFF"
+		farmToggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+		farmTargetModel = nil
+		farmDestination = nil
+		aimTarget = nil
+		statusLabel.Text = "Target: none"
+	end
+end
+
+farmToggle.MouseButton1Click:Connect(function()
+	setAutoFarm(not autoFarm)
+end)
+
+task.spawn(function()
+	while gui.Parent do
+		if autoFarm then
+			local ok, err = pcall(farmStep)
+
+			if not ok then
+				warn("[AutoFarm]", err)
+			end
+		end
+
+		task.wait(0.4)
+	end
+end)
+
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed or UserInputService:GetFocusedTextBox() then
 		return
@@ -498,14 +690,27 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		toggleFly()
 	elseif input.KeyCode == Enum.KeyCode.G then
 		setAutoAttack(not autoAttacking)
+	elseif input.KeyCode == Enum.KeyCode.H then
+		setAutoFarm(not autoFarm)
 	end
 end)
 
 player.CharacterAdded:Connect(function()
 	aimTarget = nil
+	farmDestination = nil
+	farmTargetModel = nil
 
 	if flying then
 		stopFly()
+	end
+
+	-- hồi sinh xong thì farm tự bay lại
+	if autoFarm then
+		task.delay(1.5, function()
+			if autoFarm and not flying then
+				startFly()
+			end
+		end)
 	end
 end)
 
