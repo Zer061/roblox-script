@@ -284,19 +284,14 @@ local hoverHeight = 14 -- bay cao hơn mục tiêu bấy nhiêu studs
 
 -- Chế độ gây damage: HP=0 (nhanh, KHONG duoc coin) hoặc vũ khí (chậm hơn, có coin)
 local useWeapon = false
-local weaponReach = 5 -- áp sát bấy nhiêu studs khi đánh bằng vũ khí
 local standoffDistance = keepDistance -- khoảng cách đang thực sự dùng
 local standoffHeight = hoverHeight
 
+-- Khoảng cách đứng do slider Keep quyết định ở cả 2 chế độ:
+-- súng thì để xa cho an toàn, cận chiến thì kéo Keep xuống ~5 cho chạm được.
 local function refreshStandoff()
-	if useWeapon then
-		-- phải chạm được mục tiêu thì Touched của vũ khí mới kích hoạt
-		standoffDistance = weaponReach
-		standoffHeight = 2
-	else
-		standoffDistance = keepDistance
-		standoffHeight = hoverHeight
-	end
+	standoffDistance = keepDistance
+	standoffHeight = hoverHeight
 end
 
 local bodyVelocity, bodyGyro, flyConnection
@@ -619,6 +614,90 @@ local function getEquippedTool(character, humanoid)
 	return character:FindFirstChildOfClass("Tool")
 end
 
+-- Súng thường nghe Mouse.Button1Down chứ không phải Tool.Activated,
+-- nên phải giả lập click chuột thật vào đúng vị trí mục tiêu trên màn hình.
+local GuiService = game:GetService("GuiService")
+local virtualUser = nil
+
+pcall(function()
+	virtualUser = game:GetService("VirtualUser")
+end)
+
+local fireMethod = "?"
+local aimCameraAtTarget = true -- đặt false nếu không muốn camera bị giật về mục tiêu
+
+local function fireWeapon(tool, targetRoot)
+	-- Tầng 1: cách chuẩn của Roblox
+	local activated = pcall(function()
+		tool:Activate()
+	end)
+
+	if activated then
+		fireMethod = "Activate"
+	end
+
+	if not targetRoot then
+		return
+	end
+
+	local camera = Workspace.CurrentCamera
+
+	if not camera then
+		return
+	end
+
+	-- kéo camera về mục tiêu, không thì Mouse.Hit của game trỏ đi chỗ khác
+	if aimCameraAtTarget then
+		pcall(function()
+			camera.CFrame = CFrame.lookAt(camera.CFrame.Position, targetRoot.Position)
+		end)
+	end
+
+	local point, onScreen = camera:WorldToViewportPoint(targetRoot.Position)
+
+	if not onScreen then
+		return -- mục tiêu ngoài màn hình thì click cũng vô nghĩa
+	end
+
+	local inset = GuiService:GetGuiInset()
+	local screenPoint = Vector2.new(point.X, point.Y + inset.Y)
+
+	-- Tầng 2: VirtualUser (executor nào cũng có)
+	if virtualUser then
+		local ok = pcall(function()
+			virtualUser:Button1Down(screenPoint, camera.CFrame)
+			virtualUser:Button1Up(screenPoint, camera.CFrame)
+		end)
+
+		if ok then
+			fireMethod = "VirtualUser"
+			return
+		end
+	end
+
+	-- Tầng 3: hàm click gốc của executor
+	local moveMouse, clickMouse
+
+	pcall(function()
+		local env = (getgenv and getgenv()) or getfenv()
+		moveMouse = rawget(env, "mousemoveabs")
+		clickMouse = rawget(env, "mouse1click")
+	end)
+
+	if type(clickMouse) == "function" then
+		pcall(function()
+			if type(moveMouse) == "function" then
+				moveMouse(screenPoint.X, screenPoint.Y)
+				task.wait()
+			end
+
+			clickMouse()
+		end)
+
+		fireMethod = "mouse1click"
+	end
+end
+
 local function attackStep()
 	if autoFarm or retreating then
 		return -- Auto Farm tự lo phần đánh; đang rút lui thì không đánh nữa
@@ -655,7 +734,7 @@ local function attackStep()
 	local tool = getEquippedTool(player.Character, humanoid)
 
 	if tool then
-		tool:Activate()
+		fireWeapon(tool, targetRoot)
 	end
 end
 
@@ -692,7 +771,7 @@ end)
 
 local function setKeepDistance(value)
 	keepDistance = math.clamp(value, 4, 120)
-	hoverHeight = math.clamp(keepDistance * 0.8, 6, 60)
+	hoverHeight = math.clamp(keepDistance * 0.8, 2, 60)
 	keepLabel.Text = "Keep: " .. keepDistance
 	refreshStandoff()
 end
@@ -722,7 +801,7 @@ modeToggle.MouseButton1Click:Connect(function()
 	setUseWeapon(not useWeapon)
 end)
 
--- Chỉ vung vũ khí, để Auto Farm lo phần di chuyển
+-- Chỉ khai hoả, để Auto Farm lo phần di chuyển
 local function farmSwing()
 	if retreating or not aimTarget or not aimTarget.Parent then
 		return
@@ -734,15 +813,18 @@ local function farmSwing()
 		return
 	end
 
-	if (aimTarget.Position - root.Position).Magnitude > weaponReach * 2.5 then
+	if (aimTarget.Position - root.Position).Magnitude > attackRange then
 		return
 	end
 
 	local tool = getEquippedTool(player.Character, humanoid)
 
-	if tool then
-		tool:Activate()
+	if not tool then
+		statusLabel.Text = "Khong tim thay Tool!"
+		return
 	end
+
+	fireWeapon(tool, aimTarget)
 end
 
 keepUp.MouseButton1Click:Connect(function()
@@ -900,14 +982,21 @@ local function farmStep()
 	aimTarget = targetRoot
 
 	local distance = (targetRoot.Position - root.Position).Magnitude
-	statusLabel.Text = string.format("Farm: %s (%.0f)", farmTargetModel.Name, distance)
+
+	if useWeapon then
+		statusLabel.Text = string.format("Farm: %s (%.0f) [%s]", farmTargetModel.Name, distance, fireMethod)
+	else
+		statusLabel.Text = string.format("Farm: %s (%.0f)", farmTargetModel.Name, distance)
+	end
 
 	if useWeapon then
 		-- damage đi qua vũ khí của game -> server ghi nhận kill -> có coin
 		local tool = getEquippedTool(player.Character, humanoid)
 
-		if tool and distance <= weaponReach * 2.5 then
-			tool:Activate()
+		if not tool then
+			statusLabel.Text = "Khong tim thay Tool!"
+		elseif distance <= attackRange then
+			fireWeapon(tool, targetRoot)
 		end
 	else
 		-- đủ gần để có network ownership thì kill mới ăn, không cần áp sát
