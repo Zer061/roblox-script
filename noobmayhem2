@@ -1,3 +1,6 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+]]
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local Lighting = game:GetService("Lighting")
@@ -12,8 +15,8 @@ gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 200, 0, 384)
-frame.Position = UDim2.new(0.5, -100, 0.5, -192)
+frame.Size = UDim2.new(0, 200, 0, 468)
+frame.Position = UDim2.new(0.5, -100, 0.5, -234)
 frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -103,11 +106,64 @@ keepLabel.TextSize = 14
 keepLabel.Font = Enum.Font.GothamBold
 keepLabel.Parent = frame
 
-local brightToggle = makeButton("FULLBRIGHT: OFF", UDim2.new(0, 10, 0, 320), UDim2.new(1, -20, 0, 30), Color3.fromRGB(170, 45, 45))
+local modeToggle = makeButton("DMG: HP=0 (khong coin)", UDim2.new(0, 10, 0, 320), UDim2.new(1, -20, 0, 30), Color3.fromRGB(120, 90, 40))
+
+local brightToggle = makeButton("FULLBRIGHT: OFF", UDim2.new(0, 10, 0, 356), UDim2.new(1, -20, 0, 30), Color3.fromRGB(170, 45, 45))
+
+local hpLabel = Instance.new("TextLabel")
+hpLabel.Size = UDim2.new(1, -20, 0, 18)
+hpLabel.Position = UDim2.new(0, 10, 0, 392)
+hpLabel.BackgroundTransparency = 1
+hpLabel.Text = "Retreat HP: 30%"
+hpLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+hpLabel.TextSize = 13
+hpLabel.Font = Enum.Font.GothamBold
+hpLabel.Parent = frame
+
+-- vùng bấm cao 20px cho dễ kéo, thanh nhìn thấy chỉ 8px
+local sliderTrack = Instance.new("Frame")
+sliderTrack.Size = UDim2.new(1, -20, 0, 20)
+sliderTrack.Position = UDim2.new(0, 10, 0, 412)
+sliderTrack.BackgroundTransparency = 1
+sliderTrack.Active = true
+sliderTrack.Parent = frame
+
+local sliderBar = Instance.new("Frame")
+sliderBar.Size = UDim2.new(1, 0, 0, 8)
+sliderBar.Position = UDim2.new(0, 0, 0.5, -4)
+sliderBar.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+sliderBar.BorderSizePixel = 0
+sliderBar.Parent = sliderTrack
+
+local sliderBarCorner = Instance.new("UICorner")
+sliderBarCorner.CornerRadius = UDim.new(1, 0)
+sliderBarCorner.Parent = sliderBar
+
+local sliderFill = Instance.new("Frame")
+sliderFill.Size = UDim2.new(0.3, 0, 1, 0)
+sliderFill.BackgroundColor3 = Color3.fromRGB(210, 70, 70)
+sliderFill.BorderSizePixel = 0
+sliderFill.Parent = sliderBar
+
+local sliderFillCorner = Instance.new("UICorner")
+sliderFillCorner.CornerRadius = UDim.new(1, 0)
+sliderFillCorner.Parent = sliderFill
+
+local sliderKnob = Instance.new("Frame")
+sliderKnob.Size = UDim2.new(0, 14, 0, 14)
+sliderKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+sliderKnob.Position = UDim2.new(0.3, 0, 0.5, 0)
+sliderKnob.BackgroundColor3 = Color3.fromRGB(240, 240, 240)
+sliderKnob.BorderSizePixel = 0
+sliderKnob.Parent = sliderBar
+
+local sliderKnobCorner = Instance.new("UICorner")
+sliderKnobCorner.CornerRadius = UDim.new(1, 0)
+sliderKnobCorner.Parent = sliderKnob
 
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -20, 0, 20)
-statusLabel.Position = UDim2.new(0, 10, 0, 356)
+statusLabel.Position = UDim2.new(0, 10, 0, 440)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Text = "Target: none"
 statusLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
@@ -115,6 +171,55 @@ statusLabel.TextSize = 12
 statusLabel.Font = Enum.Font.Gotham
 statusLabel.TextTruncate = Enum.TextTruncate.AtEnd
 statusLabel.Parent = frame
+
+-- ===== RETREAT (rút lui hồi máu) =====
+
+local retreatPercent = 30 -- máu dưới mức này thì bay lên trời
+local retreatAltitude = 1000 -- bay cao thêm bấy nhiêu studs
+local retreating = false
+local retreatAnchor = nil -- điểm treo trên trời khi đang chờ hồi máu
+
+local function setRetreatPercent(value)
+	retreatPercent = math.clamp(math.floor(value + 0.5), 0, 100)
+
+	local alpha = retreatPercent / 100
+	hpLabel.Text = "Retreat HP: " .. retreatPercent .. "%"
+	sliderFill.Size = UDim2.new(alpha, 0, 1, 0)
+	sliderKnob.Position = UDim2.new(alpha, 0, 0.5, 0)
+end
+
+do
+	local dragging = false
+
+	local function updateFromInput(input)
+		local origin = sliderBar.AbsolutePosition.X
+		local width = math.max(sliderBar.AbsoluteSize.X, 1)
+
+		setRetreatPercent(math.clamp((input.Position.X - origin) / width, 0, 1) * 100)
+	end
+
+	sliderTrack.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			updateFromInput(input)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch) then
+			updateFromInput(input)
+		end
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+end
 
 local enabled = false
 
@@ -177,6 +282,23 @@ local farmHoverDistance = 2 -- sai số cho phép quanh điểm đứng
 local keepDistance = 18 -- khoảng cách ngang luôn giữ với mục tiêu
 local hoverHeight = 14 -- bay cao hơn mục tiêu bấy nhiêu studs
 
+-- Chế độ gây damage: HP=0 (nhanh, KHONG duoc coin) hoặc vũ khí (chậm hơn, có coin)
+local useWeapon = false
+local weaponReach = 5 -- áp sát bấy nhiêu studs khi đánh bằng vũ khí
+local standoffDistance = keepDistance -- khoảng cách đang thực sự dùng
+local standoffHeight = hoverHeight
+
+local function refreshStandoff()
+	if useWeapon then
+		-- phải chạm được mục tiêu thì Touched của vũ khí mới kích hoạt
+		standoffDistance = weaponReach
+		standoffHeight = 2
+	else
+		standoffDistance = keepDistance
+		standoffHeight = hoverHeight
+	end
+end
+
 local bodyVelocity, bodyGyro, flyConnection
 
 local function getCharacterParts()
@@ -200,13 +322,24 @@ local function getFlyDirection(root, humanoid)
 	local camera = Workspace.CurrentCamera
 	local direction = Vector3.zero
 
+	-- Rút lui hồi máu: ưu tiên cao nhất, kể cả khi đang farm
+	if retreating and retreatAnchor then
+		local offset = retreatAnchor - root.Position
+
+		if offset.Magnitude <= 4 then
+			return Vector3.zero
+		end
+
+		return offset.Unit * math.clamp(offset.Magnitude / 12, 0.15, 1)
+	end
+
 	-- Auto Farm lái thay người chơi
 	if autoFarm and farmDestination then
 		local destination = farmDestination
 
 		-- bám mục tiêu theo từng frame, không đợi tick farm 0.4s
 		if farmAwayDir and aimTarget and aimTarget.Parent then
-			destination = aimTarget.Position + farmAwayDir * keepDistance + Vector3.new(0, hoverHeight, 0)
+			destination = aimTarget.Position + farmAwayDir * standoffDistance + Vector3.new(0, standoffHeight, 0)
 		end
 
 		local offset = destination - root.Position
@@ -487,8 +620,8 @@ local function getEquippedTool(character, humanoid)
 end
 
 local function attackStep()
-	if autoFarm then
-		return -- Auto Farm tự lo phần đánh, tránh giành quyền điều khiển
+	if autoFarm or retreating then
+		return -- Auto Farm tự lo phần đánh; đang rút lui thì không đánh nữa
 	end
 
 	local root, humanoid = getCharacterParts()
@@ -561,6 +694,55 @@ local function setKeepDistance(value)
 	keepDistance = math.clamp(value, 4, 120)
 	hoverHeight = math.clamp(keepDistance * 0.8, 6, 60)
 	keepLabel.Text = "Keep: " .. keepDistance
+	refreshStandoff()
+end
+
+local function setUseWeapon(state)
+	useWeapon = state
+
+	if useWeapon then
+		modeToggle.Text = "DMG: VU KHI (co coin)"
+		modeToggle.BackgroundColor3 = Color3.fromRGB(45, 170, 75)
+
+		-- tắt luôn kill HP=0, không thì nó cướp mạng mà chẳng ra coin
+		if enabled then
+			enabled = false
+			toggle.Text = "OFF"
+			toggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+		end
+	else
+		modeToggle.Text = "DMG: HP=0 (khong coin)"
+		modeToggle.BackgroundColor3 = Color3.fromRGB(120, 90, 40)
+	end
+
+	refreshStandoff()
+end
+
+modeToggle.MouseButton1Click:Connect(function()
+	setUseWeapon(not useWeapon)
+end)
+
+-- Chỉ vung vũ khí, để Auto Farm lo phần di chuyển
+local function farmSwing()
+	if retreating or not aimTarget or not aimTarget.Parent then
+		return
+	end
+
+	local root, humanoid = getCharacterParts()
+
+	if not root then
+		return
+	end
+
+	if (aimTarget.Position - root.Position).Magnitude > weaponReach * 2.5 then
+		return
+	end
+
+	local tool = getEquippedTool(player.Character, humanoid)
+
+	if tool then
+		tool:Activate()
+	end
 end
 
 keepUp.MouseButton1Click:Connect(function()
@@ -573,8 +755,16 @@ end)
 
 task.spawn(function()
 	while gui.Parent do
-		if autoAttacking then
-			local ok, err = pcall(attackStep)
+		local step
+
+		if autoFarm and useWeapon then
+			step = farmSwing -- vung nhanh hơn nhịp 0.4s của vòng farm
+		elseif autoAttacking then
+			step = attackStep
+		end
+
+		if step then
+			local ok, err = pcall(step)
 
 			if not ok then
 				warn("[AutoAttack]", err)
@@ -635,12 +825,12 @@ local function computeAwayDirection(root, targetRoot)
 	-- lực đẩy khỏi mọi noob đang lọt vào vùng an toàn
 	local push = Vector3.zero
 
-	for _, other in ipairs(collectTargets(root, keepDistance * 2)) do
+	for _, other in ipairs(collectTargets(root, standoffDistance * 2)) do
 		local offset = (myPos - other.root.Position) * Vector3.new(1, 0, 1)
 		local distance = offset.Magnitude
 
-		if distance > 0.5 and distance < keepDistance then
-			push += offset.Unit * ((keepDistance - distance) / keepDistance)
+		if distance > 0.5 and distance < standoffDistance then
+			push += offset.Unit * ((standoffDistance - distance) / standoffDistance)
 		end
 	end
 
@@ -656,6 +846,10 @@ local function computeAwayDirection(root, targetRoot)
 end
 
 local function farmStep()
+	if retreating then
+		return -- đang treo trên trời chờ hồi máu, không kéo về mục tiêu
+	end
+
 	local root, humanoid = getCharacterParts()
 
 	if not root then
@@ -702,20 +896,29 @@ local function farmStep()
 	end
 
 	farmAwayDir = computeAwayDirection(root, targetRoot)
-	farmDestination = targetRoot.Position + farmAwayDir * keepDistance + Vector3.new(0, hoverHeight, 0)
+	farmDestination = targetRoot.Position + farmAwayDir * standoffDistance + Vector3.new(0, standoffHeight, 0)
 	aimTarget = targetRoot
 
 	local distance = (targetRoot.Position - root.Position).Magnitude
 	statusLabel.Text = string.format("Farm: %s (%.0f)", farmTargetModel.Name, distance)
 
-	-- đủ gần để có network ownership thì kill mới ăn, không cần áp sát
-	killNoobs()
-
-	if distance <= attackRange then
+	if useWeapon then
+		-- damage đi qua vũ khí của game -> server ghi nhận kill -> có coin
 		local tool = getEquippedTool(player.Character, humanoid)
 
-		if tool then
+		if tool and distance <= weaponReach * 2.5 then
 			tool:Activate()
+		end
+	else
+		-- đủ gần để có network ownership thì kill mới ăn, không cần áp sát
+		killNoobs()
+
+		if distance <= attackRange then
+			local tool = getEquippedTool(player.Character, humanoid)
+
+			if tool then
+				tool:Activate()
+			end
 		end
 	end
 end
@@ -752,6 +955,60 @@ task.spawn(function()
 		end
 
 		task.wait(0.4)
+	end
+end)
+
+-- ===== VÒNG LẶP THEO DÕI MÁU =====
+
+local function retreatStep()
+	local root, humanoid = getCharacterParts()
+
+	if not root then
+		retreating = false
+		retreatAnchor = nil
+		return
+	end
+
+	if humanoid.MaxHealth <= 0 then
+		return
+	end
+
+	local ratio = humanoid.Health / humanoid.MaxHealth * 100
+
+	if not retreating then
+		if ratio <= retreatPercent then
+			retreating = true
+			retreatAnchor = root.Position + Vector3.new(0, retreatAltitude, 0)
+			aimTarget = nil
+
+			if not flying then
+				startFly()
+			end
+		end
+
+		return
+	end
+
+	-- hồi đủ thì quay lại làm việc
+	local resumeAt = math.min(95, retreatPercent + 40)
+
+	statusLabel.Text = string.format("Hoi mau: %.0f%% / %d%%", ratio, resumeAt)
+
+	if ratio >= resumeAt then
+		retreating = false
+		retreatAnchor = nil
+	end
+end
+
+task.spawn(function()
+	while gui.Parent do
+		local ok, err = pcall(retreatStep)
+
+		if not ok then
+			warn("[Retreat]", err)
+		end
+
+		task.wait(0.25)
 	end
 end)
 
@@ -855,6 +1112,30 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		setAutoFarm(not autoFarm)
 	elseif input.KeyCode == Enum.KeyCode.J then
 		setFullbright(not fullbright)
+	elseif input.KeyCode == Enum.KeyCode.K then
+		setUseWeapon(not useWeapon)
+	elseif input.KeyCode == Enum.KeyCode.L then
+		-- liệt kê remote để biết game gửi damage qua đâu (xem ở console F9)
+		print("===== REMOTE =====")
+
+		for _, object in ipairs(game:GetService("ReplicatedStorage"):GetDescendants()) do
+			if object:IsA("RemoteEvent") or object:IsA("RemoteFunction") then
+				print(object.ClassName, object:GetFullName())
+			end
+		end
+
+		local character = player.Character
+		local tool = character and character:FindFirstChildOfClass("Tool")
+
+		if tool then
+			print("--- trong tool", tool.Name, "---")
+
+			for _, object in ipairs(tool:GetDescendants()) do
+				print(object.ClassName, object.Name)
+			end
+		end
+
+		print("==================")
 	end
 end)
 
@@ -863,6 +1144,8 @@ player.CharacterAdded:Connect(function()
 	farmDestination = nil
 	farmAwayDir = nil
 	farmTargetModel = nil
+	retreating = false
+	retreatAnchor = nil
 
 	if flying then
 		stopFly()
