@@ -1,0 +1,96 @@
+--[[
+	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
+]]
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+
+local player = Players.LocalPlayer
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "NoobKiller"
+gui.ResetOnSpawn = false
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.new(0, 190, 0, 70)
+frame.Position = UDim2.new(0.5, -95, 0.5, -35)
+frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Draggable = true
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 28)
+title.BackgroundTransparency = 1
+title.Text = "NOOB KILLER"
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextSize = 16
+title.Font = Enum.Font.GothamBold
+title.Parent = frame
+
+local toggle = Instance.new("TextButton")
+toggle.Size = UDim2.new(1, -20, 0, 30)
+toggle.Position = UDim2.new(0, 10, 0, 32)
+toggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+toggle.BorderSizePixel = 0
+toggle.Text = "OFF"
+toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+toggle.TextSize = 14
+toggle.Font = Enum.Font.GothamBold
+toggle.Parent = frame
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 7)
+toggleCorner.Parent = toggle
+
+local enabled = false
+
+local function isNoobFolder(instance)
+	if not instance:IsA("Folder") then
+		return false
+	end
+
+	local name = instance.Name:lower()
+
+	return name == "allnoobs" or name:find("noob", 1, true) ~= nil
+end
+
+local function killNoobs()
+	for _, object in ipairs(Workspace:GetDescendants()) do
+		if isNoobFolder(object) then
+			for _, descendant in ipairs(object:GetDescendants()) do
+				if descendant:IsA("Humanoid") then
+					descendant.Health = 0
+				end
+			end
+		end
+	end
+end
+
+toggle.MouseButton1Click:Connect(function()
+	enabled = not enabled
+
+	if enabled then
+		toggle.Text = "ON"
+		toggle.BackgroundColor3 = Color3.fromRGB(45, 170, 75)
+		killNoobs()
+	else
+		toggle.Text = "OFF"
+		toggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+	end
+end)
+
+task.spawn(function()
+	while gui.Parent do
+		if enabled then
+			killNoobs()
+		end
+
+		task.wait(0.15)
+	end
+end)
