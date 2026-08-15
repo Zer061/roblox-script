@@ -1,6 +1,3 @@
---[[
-	WARNING: Heads up! This script has not been verified by ScriptBlox. Use at your own risk!
-]]
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local UserInputService = game:GetService("UserInputService")
@@ -14,8 +11,8 @@ gui.ResetOnSpawn = false
 gui.Parent = player:WaitForChild("PlayerGui")
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.new(0, 200, 0, 182)
-frame.Position = UDim2.new(0.5, -100, 0.5, -91)
+frame.Size = UDim2.new(0, 200, 0, 274)
+frame.Position = UDim2.new(0.5, -100, 0.5, -137)
 frame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -75,6 +72,32 @@ speedLabel.Parent = frame
 local upButton = makeButton("UP", UDim2.new(0, 10, 0, 140), UDim2.new(0.5, -14, 0, 30), Color3.fromRGB(50, 50, 50))
 local downButton = makeButton("DOWN", UDim2.new(0.5, 4, 0, 140), UDim2.new(0.5, -14, 0, 30), Color3.fromRGB(50, 50, 50))
 
+local attackToggle = makeButton("AUTO ATK: OFF", UDim2.new(0, 10, 0, 176), UDim2.new(1, -20, 0, 30), Color3.fromRGB(170, 45, 45))
+
+local rangeDown = makeButton("-", UDim2.new(0, 10, 0, 212), UDim2.new(0, 34, 0, 28), Color3.fromRGB(50, 50, 50))
+local rangeUp = makeButton("+", UDim2.new(1, -44, 0, 212), UDim2.new(0, 34, 0, 28), Color3.fromRGB(50, 50, 50))
+
+local rangeLabel = Instance.new("TextLabel")
+rangeLabel.Size = UDim2.new(1, -96, 0, 28)
+rangeLabel.Position = UDim2.new(0, 48, 0, 212)
+rangeLabel.BackgroundTransparency = 1
+rangeLabel.Text = "Range: 60"
+rangeLabel.TextColor3 = Color3.fromRGB(230, 230, 230)
+rangeLabel.TextSize = 14
+rangeLabel.Font = Enum.Font.GothamBold
+rangeLabel.Parent = frame
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -20, 0, 20)
+statusLabel.Position = UDim2.new(0, 10, 0, 244)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Target: none"
+statusLabel.TextColor3 = Color3.fromRGB(160, 160, 160)
+statusLabel.TextSize = 12
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextTruncate = Enum.TextTruncate.AtEnd
+statusLabel.Parent = frame
+
 local enabled = false
 
 local function isNoobFolder(instance)
@@ -128,6 +151,7 @@ local flying = false
 local flySpeed = 60
 local holdingUp = false
 local holdingDown = false
+local aimTarget = nil -- được Auto Attack set, dùng chung với BodyGyro khi đang bay
 
 local bodyVelocity, bodyGyro, flyConnection
 
@@ -258,14 +282,17 @@ local function startFly()
 
 		bodyVelocity.Velocity = getFlyDirection(currentHumanoid) * flySpeed
 
-		local camera = Workspace.CurrentCamera
+		local look
 
-		if camera then
-			local look = camera.CFrame.LookVector * Vector3.new(1, 0, 1)
+		if aimTarget and aimTarget.Parent then
+			look = (aimTarget.Position - currentRoot.Position) * Vector3.new(1, 0, 1)
+		else
+			local camera = Workspace.CurrentCamera
+			look = camera and camera.CFrame.LookVector * Vector3.new(1, 0, 1) or nil
+		end
 
-			if look.Magnitude > 0 then
-				bodyGyro.CFrame = CFrame.lookAt(currentRoot.Position, currentRoot.Position + look.Unit)
-			end
+		if look and look.Magnitude > 0.01 then
+			bodyGyro.CFrame = CFrame.lookAt(currentRoot.Position, currentRoot.Position + look.Unit)
 		end
 	end)
 end
@@ -313,6 +340,155 @@ speedDown.MouseButton1Click:Connect(function()
 	setSpeed(flySpeed - 10)
 end)
 
+-- ===== AUTO ATTACK =====
+
+local autoAttacking = false
+local attackRange = 60
+local attackCooldown = 0.2
+
+local function getTargetRoot(humanoid)
+	if humanoid.Health <= 0 then
+		return nil
+	end
+
+	local model = humanoid.Parent
+
+	if not model or not model:IsA("Model") or model == player.Character then
+		return nil
+	end
+
+	-- bỏ qua người chơi thật, chỉ đánh NPC/noob
+	if Players:GetPlayerFromCharacter(model) then
+		return nil
+	end
+
+	return model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+end
+
+local function getNearestTarget(root)
+	local bestRoot, bestName, bestDistance = nil, nil, attackRange
+
+	for _, object in ipairs(Workspace:GetDescendants()) do
+		if object:IsA("Humanoid") then
+			local targetRoot = getTargetRoot(object)
+
+			if targetRoot then
+				local distance = (targetRoot.Position - root.Position).Magnitude
+
+				if distance <= bestDistance then
+					bestRoot, bestName, bestDistance = targetRoot, object.Parent.Name, distance
+				end
+			end
+		end
+	end
+
+	return bestRoot, bestName, bestDistance
+end
+
+local function getEquippedTool(character, humanoid)
+	local tool = character:FindFirstChildOfClass("Tool")
+
+	if tool then
+		return tool
+	end
+
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	local stored = backpack and backpack:FindFirstChildOfClass("Tool")
+
+	if not stored then
+		return nil
+	end
+
+	humanoid:EquipTool(stored)
+
+	if stored.Parent ~= character then
+		stored.Parent = character
+	end
+
+	return character:FindFirstChildOfClass("Tool")
+end
+
+local function attackStep()
+	local root, humanoid = getCharacterParts()
+
+	if not root then
+		aimTarget = nil
+		statusLabel.Text = "Target: none"
+		return
+	end
+
+	local targetRoot, targetName, distance = getNearestTarget(root)
+
+	aimTarget = targetRoot
+
+	if not targetRoot then
+		statusLabel.Text = "Target: none"
+		return
+	end
+
+	statusLabel.Text = string.format("Target: %s (%.0f)", targetName, distance)
+
+	-- quay mặt về mục tiêu (khi bay thì BodyGyro lo phần này)
+	if not flying then
+		local look = (targetRoot.Position - root.Position) * Vector3.new(1, 0, 1)
+
+		if look.Magnitude > 0.01 then
+			root.CFrame = CFrame.lookAt(root.Position, root.Position + look.Unit)
+		end
+	end
+
+	local tool = getEquippedTool(player.Character, humanoid)
+
+	if tool then
+		tool:Activate()
+	end
+end
+
+local function setAutoAttack(state)
+	autoAttacking = state
+
+	if autoAttacking then
+		attackToggle.Text = "AUTO ATK: ON"
+		attackToggle.BackgroundColor3 = Color3.fromRGB(45, 170, 75)
+	else
+		attackToggle.Text = "AUTO ATK: OFF"
+		attackToggle.BackgroundColor3 = Color3.fromRGB(170, 45, 45)
+		aimTarget = nil
+		statusLabel.Text = "Target: none"
+	end
+end
+
+attackToggle.MouseButton1Click:Connect(function()
+	setAutoAttack(not autoAttacking)
+end)
+
+local function setRange(value)
+	attackRange = math.clamp(value, 10, 500)
+	rangeLabel.Text = "Range: " .. attackRange
+end
+
+rangeUp.MouseButton1Click:Connect(function()
+	setRange(attackRange + 10)
+end)
+
+rangeDown.MouseButton1Click:Connect(function()
+	setRange(attackRange - 10)
+end)
+
+task.spawn(function()
+	while gui.Parent do
+		if autoAttacking then
+			local ok, err = pcall(attackStep)
+
+			if not ok then
+				warn("[AutoAttack]", err)
+			end
+		end
+
+		task.wait(attackCooldown)
+	end
+end)
+
 UserInputService.InputBegan:Connect(function(input, processed)
 	if processed or UserInputService:GetFocusedTextBox() then
 		return
@@ -320,10 +496,14 @@ UserInputService.InputBegan:Connect(function(input, processed)
 
 	if input.KeyCode == Enum.KeyCode.F then
 		toggleFly()
+	elseif input.KeyCode == Enum.KeyCode.G then
+		setAutoAttack(not autoAttacking)
 	end
 end)
 
 player.CharacterAdded:Connect(function()
+	aimTarget = nil
+
 	if flying then
 		stopFly()
 	end
