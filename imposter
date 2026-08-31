@@ -1,0 +1,101 @@
+-- [[ Rscripts Risk Notice ]]
+-- This script is not verified by rscripts.net. Deal with caution.
+--
+-- Stay safe:
+--   • Never log in on unofficial Roblox sites or lookalike domains.
+--   • Real Roblox links use roblox.com (check the .com ending).
+--   • Treat fake Roblox login / "claim reward" pages as phishing.
+-- [[ End Rscripts Risk Notice ]]
+local plrs = game:GetService("Players");
+local rs = game:GetService("RunService");
+local cam = workspace.CurrentCamera;
+
+local esp = {};
+local conn;
+
+local sg = Instance.new("ScreenGui");
+local frm = Instance.new("Frame");
+local scrl = Instance.new("ScrollingFrame");
+local lyt = Instance.new("UIListLayout");
+
+sg.Parent = game:GetService("CoreGui");
+frm.Size = UDim2.new(0, 300, 0, 300);
+frm.Position = UDim2.new(1, -320, 0.5, -150);
+frm.BackgroundColor3 = Color3.fromRGB(30, 30, 30);
+frm.BorderSizePixel = 0;
+frm.Parent = sg;
+
+scrl.Size = UDim2.new(1, -10, 1, -10);
+scrl.Position = UDim2.new(0, 5, 0, 5);
+scrl.BackgroundTransparency = 1;
+scrl.Parent = frm;
+
+lyt.Parent = scrl;
+lyt.Padding = UDim.new(0, 5);
+
+local function mkdraw()
+    local d = Drawing.new("Text");
+    d.Size = 13;
+    d.Center = true;
+    d.Outline = true;
+    d.Visible = true;
+    d.Color = Color3.new(1,1,1);
+    return d;
+end;
+
+local function updtxt(plr, txt, role, alive)
+    if not esp[plr] then
+        esp[plr] = {
+            draw = mkdraw(),
+            label = Instance.new("TextLabel")
+        };
+        local lbl = esp[plr].label;
+        lbl.Size = UDim2.new(1, 0, 0, 25);
+        lbl.BackgroundColor3 = Color3.fromRGB(40, 40, 40);
+        lbl.BorderSizePixel = 0;
+        lbl.TextColor3 = Color3.new(1,1,1);
+        lbl.TextSize = 14;
+        lbl.TextWrapped = true;
+        lbl.Parent = scrl;
+    end;
+    
+    local char = plr.Character;
+    if not char then 
+        esp[plr].draw.Visible = false;
+        return;
+    end;
+    
+    local hum = char:FindFirstChild("HumanoidRootPart");
+    if not hum then
+        esp[plr].draw.Visible = false;
+        return;
+    end;
+    
+    local pos, vis = cam:WorldToViewportPoint(hum.Position);
+    if not vis then
+        esp[plr].draw.Visible = false;
+        return;
+    end;
+    
+    esp[plr].draw.Position = Vector2.new(pos.X, pos.Y - 30);
+    esp[plr].draw.Text = txt;
+    esp[plr].draw.Color = role == "Imposter" and Color3.new(1,0,0) or Color3.new(1,1,1);
+    esp[plr].draw.Visible = true;
+    
+    esp[plr].label.Text = plr.Name.." - "..txt;
+    esp[plr].label.TextColor3 = role == "Imposter" and Color3.new(1,0,0) or Color3.new(1,1,1);
+    esp[plr].label.BackgroundColor3 = alive and Color3.fromRGB(40,80,40) or Color3.fromRGB(80,40,40);
+end;
+
+conn = rs.RenderStepped:Connect(function()
+    for _,p in plrs:GetPlayers() do
+        if p ~= plrs.LocalPlayer then
+            local states = p:WaitForChild("PublicStates",1);
+            local role = states and states:FindFirstChild("Role");
+            local subrole = states and states:FindFirstChild("SubRole");
+            local alive = states and states:FindFirstChild("Alive");
+            local txt = (role and role.Value or "Unknown")..(subrole and " ["..subrole.Value.."]" or "")..(alive and alive.Value and " [Alive]" or " [Dead]");
+            updtxt(p, txt, role and role.Value, alive and alive.Value);
+        end;
+    end;
+end);
