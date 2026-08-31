@@ -732,3 +732,351 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		setESP(not state.ESP)
 	end
 end)
+
+--------------------------------------------------------------------
+-- KEY / OBJECT ESP
+--   Scans the workspace for instances whose name matches a keyword
+--   (default "key"), highlights them through walls and puts a HUD
+--   arrow on screen pointing at the closest one.
+--------------------------------------------------------------------
+
+state.KeyESP = false
+
+local keyQuery = "key" -- lowercase, editable from the panel
+local keyObjects = {} -- Instance -> { highlight, billboard, label, part }
+local nearestKey = nil -- { part = BasePart, distance = number }
+
+local KEY_COLOR = Color3.fromRGB(255, 205, 60)
+
+local keyHolder = Instance.new("Folder")
+keyHolder.Name = "KeyESPHolder"
+keyHolder.Parent = gui
+
+-- A matching instance still needs a physical part to attach visuals to.
+local function anchorPart(inst)
+	if inst:IsA("BasePart") then
+		return inst
+	end
+	if inst:IsA("Tool") then
+		return inst:FindFirstChild("Handle") or inst:FindFirstChildWhichIsA("BasePart")
+	end
+	if inst:IsA("Model") then
+		return inst.PrimaryPart or inst:FindFirstChildWhichIsA("BasePart", true)
+	end
+	return nil
+end
+
+local function isMine(inst)
+	local char = player.Character
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if char and inst:IsDescendantOf(char) then
+		return true
+	end
+	if backpack and inst:IsDescendantOf(backpack) then
+		return true
+	end
+	return false
+end
+
+local function removeKeyEsp(inst)
+	local o = keyObjects[inst]
+	if not o then
+		return
+	end
+	if o.highlight then
+		o.highlight:Destroy()
+	end
+	if o.billboard then
+		o.billboard:Destroy()
+	end
+	keyObjects[inst] = nil
+end
+
+local function clearKeyEsp()
+	for inst in pairs(keyObjects) do
+		removeKeyEsp(inst)
+	end
+	nearestKey = nil
+end
+
+local function createKeyEsp(inst, part)
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "KeyESP"
+	highlight.Adornee = inst:IsA("Model") and inst or part
+	highlight.FillColor = KEY_COLOR
+	highlight.OutlineColor = Color3.new(1, 1, 1)
+	highlight.FillTransparency = 0.35
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Parent = keyHolder
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "KeyTag"
+	billboard.Adornee = part
+	billboard.Size = UDim2.fromOffset(190, 30)
+	billboard.StudsOffset = Vector3.new(0, 2, 0)
+	billboard.AlwaysOnTop = true
+	billboard.MaxDistance = math.huge
+	billboard.Parent = keyHolder
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 14
+	label.TextColor3 = KEY_COLOR
+	label.TextStrokeTransparency = 0.3
+	label.TextStrokeColor3 = Color3.new(0, 0, 0)
+	label.Text = inst.Name
+	label.Parent = billboard
+
+	local o = { highlight = highlight, billboard = billboard, label = label, part = part }
+	keyObjects[inst] = o
+	return o
+end
+
+-- Full workspace sweep. Runs on a slow timer because it is the expensive part.
+local function scanForKeys()
+	local found = {}
+	for _, inst in ipairs(workspace:GetDescendants()) do
+		local name = string.lower(inst.Name)
+		if string.find(name, keyQuery, 1, true) and not isMine(inst) then
+			local part = anchorPart(inst)
+			if part then
+				found[inst] = part
+				local o = keyObjects[inst]
+				if not o then
+					createKeyEsp(inst, part)
+				elseif o.part ~= part then
+					removeKeyEsp(inst)
+					createKeyEsp(inst, part)
+				end
+			end
+		end
+	end
+	-- forget anything that vanished, was renamed or got picked up by us
+	for inst in pairs(keyObjects) do
+		if found[inst] == nil or inst.Parent == nil then
+			removeKeyEsp(inst)
+		end
+	end
+end
+
+-- Refresh distances and work out which key is closest.
+local function refreshKeyTags()
+	local myChar = player.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	local origin = myRoot and myRoot.Position or (workspace.CurrentCamera and workspace.CurrentCamera.CFrame.Position)
+	if not origin then
+		return
+	end
+
+	local best, bestDist = nil, math.huge
+	for inst, o in pairs(keyObjects) do
+		local part = o.part
+		if part and part.Parent then
+			local dist = (part.Position - origin).Magnitude
+			o.label.Text = string.format("%s  [%dm]", inst.Name, math.floor(dist + 0.5))
+			if dist < bestDist then
+				best, bestDist = part, dist
+			end
+		else
+			removeKeyEsp(inst)
+		end
+	end
+
+	nearestKey = best and { part = best, distance = bestDist } or nil
+end
+
+--------------------------------------------------------------------
+-- HUD: distance + direction to the closest key
+--------------------------------------------------------------------
+
+local keyHud = Instance.new("TextLabel")
+keyHud.Name = "KeyHud"
+keyHud.Size = UDim2.fromOffset(320, 34)
+keyHud.Position = UDim2.new(0.5, -160, 0, 12)
+keyHud.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+keyHud.BackgroundTransparency = 0.45
+keyHud.Font = Enum.Font.GothamBold
+keyHud.TextSize = 17
+keyHud.TextColor3 = KEY_COLOR
+keyHud.TextStrokeTransparency = 0.4
+keyHud.Text = ""
+keyHud.Visible = false
+keyHud.Parent = gui
+corner(keyHud, 8)
+
+local function updateKeyHud()
+	if not state.KeyESP then
+		keyHud.Visible = false
+		return
+	end
+	if not nearestKey then
+		-- Nothing matched: tell the user so they can try another keyword.
+		keyHud.Text = string.format('KEY: no object named "%s" found', keyQuery)
+		keyHud.Visible = true
+		return
+	end
+
+	local cam = workspace.CurrentCamera
+	if not cam then
+		keyHud.Visible = false
+		return
+	end
+
+	local to = nearestKey.part.Position - cam.CFrame.Position
+	local flat = Vector3.new(to.X, 0, to.Z)
+	local arrow = "*"
+	if flat.Magnitude > 0.1 then
+		flat = flat.Unit
+		local look = cam.CFrame.LookVector
+		local right = cam.CFrame.RightVector
+		local lookFlat = Vector3.new(look.X, 0, look.Z)
+		local rightFlat = Vector3.new(right.X, 0, right.Z)
+		if lookFlat.Magnitude > 0.01 and rightFlat.Magnitude > 0.01 then
+			local angle = math.deg(math.atan2(rightFlat.Unit:Dot(flat), lookFlat.Unit:Dot(flat)))
+			local a = math.abs(angle)
+			if a <= 25 then
+				arrow = "^ AHEAD"
+			elseif a >= 155 then
+				arrow = "v BEHIND"
+			elseif angle > 0 then
+				arrow = "> RIGHT"
+			else
+				arrow = "< LEFT"
+			end
+		end
+	end
+
+	local up = ""
+	local dy = to.Y
+	if dy > 6 then
+		up = "  (above)"
+	elseif dy < -6 then
+		up = "  (below)"
+	end
+
+	keyHud.Text = string.format("KEY  %dm   %s%s", math.floor(nearestKey.distance + 0.5), arrow, up)
+	keyHud.Visible = true
+end
+
+--------------------------------------------------------------------
+-- KEY ESP LOOP (slow scan + fast tag/HUD refresh)
+--------------------------------------------------------------------
+
+do
+	local scanClock, tagClock = 0, 0
+	RunService.Heartbeat:Connect(function(dt)
+		if not state.KeyESP then
+			return
+		end
+
+		scanClock = scanClock + dt
+		if scanClock >= 1 then
+			scanClock = 0
+			scanForKeys()
+		end
+
+		tagClock = tagClock + dt
+		if tagClock >= 0.1 then
+			tagClock = 0
+			refreshKeyTags()
+			updateKeyHud()
+		end
+	end)
+end
+
+--------------------------------------------------------------------
+-- KEY ESP UI
+--------------------------------------------------------------------
+
+local keyBtn = makeToggle(6, "KeyESPToggle", "Key ESP")
+
+local function setKeyESP(on)
+	state.KeyESP = on
+	keyBtn.Text = on and "Key ESP: ON" or "Key ESP: OFF"
+	keyBtn.BackgroundColor3 = on and THEME.on or THEME.off
+	if on then
+		scanForKeys()
+		refreshKeyTags()
+		updateKeyHud()
+	else
+		clearKeyEsp()
+		keyHud.Visible = false
+	end
+end
+
+keyBtn.Activated:Connect(function()
+	setKeyESP(not state.KeyESP)
+end)
+
+-- Keyword box: change what Key ESP looks for (chest, door, gem, ...)
+local queryRow = Instance.new("Frame")
+queryRow.Name = "KeyQueryRow"
+queryRow.LayoutOrder = 7
+queryRow.Size = UDim2.new(1, 0, 0, 52)
+queryRow.BackgroundColor3 = THEME.panel
+queryRow.BorderSizePixel = 0
+queryRow.Parent = panel
+corner(queryRow, 10)
+
+local queryLabel = Instance.new("TextLabel")
+queryLabel.Size = UDim2.new(1, -16, 0, 16)
+queryLabel.Position = UDim2.fromOffset(10, 4)
+queryLabel.BackgroundTransparency = 1
+queryLabel.Text = "Search name contains"
+queryLabel.TextColor3 = THEME.muted
+queryLabel.TextSize = 12
+queryLabel.Font = Enum.Font.Gotham
+queryLabel.TextXAlignment = Enum.TextXAlignment.Left
+queryLabel.Parent = queryRow
+
+local queryBox = Instance.new("TextBox")
+queryBox.Size = UDim2.new(1, -20, 0, 26)
+queryBox.Position = UDim2.fromOffset(10, 21)
+queryBox.BackgroundColor3 = THEME.bg
+queryBox.Text = keyQuery
+queryBox.PlaceholderText = "key"
+queryBox.TextColor3 = THEME.text
+queryBox.TextSize = 14
+queryBox.Font = Enum.Font.GothamMedium
+queryBox.ClearTextOnFocus = false
+queryBox.Parent = queryRow
+corner(queryBox, 8)
+
+queryBox.FocusLost:Connect(function()
+	local text = string.lower((queryBox.Text or ""):match("^%s*(.-)%s*$"))
+	if text == "" then
+		text = "key"
+	end
+	keyQuery = text
+	queryBox.Text = text
+	clearKeyEsp()
+	if state.KeyESP then
+		scanForKeys()
+		refreshKeyTags()
+	end
+end)
+
+--------------------------------------------------------------------
+-- PANEL / RESET / HOTKEY WIRING FOR KEY ESP
+--------------------------------------------------------------------
+
+panel.Size = UDim2.fromOffset(288, 560)
+
+hint.LayoutOrder = 8
+hint.Text = "Keys:  RightShift panel  |  N noclip\nB fullbright  |  V ESP  |  K key ESP"
+
+resetBtn.Activated:Connect(function()
+	setKeyESP(false)
+end)
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed or UserInputService:GetFocusedTextBox() then
+		return
+	end
+	if input.KeyCode == Enum.KeyCode.K then
+		setKeyESP(not state.KeyESP)
+	end
+end)
