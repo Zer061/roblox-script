@@ -170,7 +170,7 @@ corner(toggleBtn, 26)
 
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
-panel.Size = UDim2.fromOffset(280, 300)
+panel.Size = UDim2.fromOffset(288, 452)
 panel.Position = UDim2.new(0, 80, 0, 90)
 panel.BackgroundColor3 = THEME.bg
 panel.BorderSizePixel = 0
@@ -347,7 +347,7 @@ end)
 
 local resetBtn = Instance.new("TextButton")
 resetBtn.Name = "Reset"
-resetBtn.LayoutOrder = 4
+resetBtn.LayoutOrder = 9
 resetBtn.Size = UDim2.new(1, 0, 0, 36)
 resetBtn.BackgroundColor3 = THEME.panel
 resetBtn.Text = "Reset to default"
@@ -429,3 +429,306 @@ do
 end
 
 applyStats()
+
+--------------------------------------------------------------------
+-- FULLBRIGHT
+--------------------------------------------------------------------
+
+local Lighting = game:GetService("Lighting")
+
+state.Fullbright = false
+
+local lightingBackup = nil -- saved once, restored when fullbright is turned off
+local atmosphereBackup = {} -- Atmosphere -> { Density, Haze, Glare }
+
+local FULLBRIGHT = {
+	Brightness = 3,
+	ClockTime = 14,
+	FogStart = 1e6,
+	FogEnd = 1e6,
+	GlobalShadows = false,
+	Ambient = Color3.new(1, 1, 1),
+	OutdoorAmbient = Color3.new(1, 1, 1),
+	ExposureCompensation = 0,
+}
+
+local function backupLighting()
+	if lightingBackup then
+		return
+	end
+	lightingBackup = {}
+	for prop in pairs(FULLBRIGHT) do
+		lightingBackup[prop] = Lighting[prop]
+	end
+	table.clear(atmosphereBackup)
+	for _, obj in ipairs(Lighting:GetChildren()) do
+		if obj:IsA("Atmosphere") then
+			atmosphereBackup[obj] = { obj.Density, obj.Haze, obj.Glare }
+		end
+	end
+end
+
+-- Push the bright values in. Called on a loop so a game with a day/night
+-- cycle cannot quietly write the darkness back.
+local function pushFullbright()
+	for prop, value in pairs(FULLBRIGHT) do
+		if Lighting[prop] ~= value then
+			Lighting[prop] = value
+		end
+	end
+	for _, obj in ipairs(Lighting:GetChildren()) do
+		if obj:IsA("Atmosphere") then
+			if atmosphereBackup[obj] == nil then
+				atmosphereBackup[obj] = { obj.Density, obj.Haze, obj.Glare }
+			end
+			obj.Density = 0
+			obj.Haze = 0
+			obj.Glare = 0
+		end
+	end
+end
+
+local function restoreLighting()
+	if lightingBackup then
+		for prop, value in pairs(lightingBackup) do
+			Lighting[prop] = value
+		end
+		lightingBackup = nil
+	end
+	for obj, saved in pairs(atmosphereBackup) do
+		if obj.Parent then
+			obj.Density, obj.Haze, obj.Glare = saved[1], saved[2], saved[3]
+		end
+	end
+	table.clear(atmosphereBackup)
+end
+
+--------------------------------------------------------------------
+-- ESP: highlight other players + name / distance / health tag
+--------------------------------------------------------------------
+
+state.ESP = false
+
+local espHolder = Instance.new("Folder")
+espHolder.Name = "ESPHolder"
+espHolder.Parent = gui
+
+local espObjects = {} -- Player -> { highlight, billboard, label }
+
+local ESP_ENEMY = Color3.fromRGB(255, 78, 78)
+local ESP_ALLY = Color3.fromRGB(74, 210, 130)
+
+local function removeEsp(plr)
+	local o = espObjects[plr]
+	if not o then
+		return
+	end
+	if o.highlight then
+		o.highlight:Destroy()
+	end
+	if o.billboard then
+		o.billboard:Destroy()
+	end
+	espObjects[plr] = nil
+end
+
+local function clearEsp()
+	for plr in pairs(espObjects) do
+		removeEsp(plr)
+	end
+end
+
+local function espColor(plr)
+	if plr.Team and player.Team and plr.Team == player.Team then
+		return ESP_ALLY
+	end
+	return ESP_ENEMY
+end
+
+local function createEsp(plr)
+	local highlight = Instance.new("Highlight")
+	highlight.Name = "ESP_" .. plr.Name
+	highlight.FillTransparency = 0.65
+	highlight.OutlineTransparency = 0
+	highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+	highlight.Parent = espHolder
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "Tag_" .. plr.Name
+	billboard.Size = UDim2.fromOffset(210, 34)
+	billboard.StudsOffset = Vector3.new(0, 2.6, 0)
+	billboard.AlwaysOnTop = true
+	billboard.MaxDistance = 5000
+	billboard.Parent = espHolder
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBold
+	label.TextSize = 13
+	label.TextStrokeTransparency = 0.4
+	label.TextStrokeColor3 = Color3.new(0, 0, 0)
+	label.Text = plr.Name
+	label.Parent = billboard
+
+	local o = { highlight = highlight, billboard = billboard, label = label }
+	espObjects[plr] = o
+	return o
+end
+
+local function updateEspFor(plr)
+	local char = plr.Character
+	local head = char and char:FindFirstChild("Head")
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not (char and head and hum) or hum.Health <= 0 then
+		removeEsp(plr)
+		return
+	end
+
+	local o = espObjects[plr] or createEsp(plr)
+	local color = espColor(plr)
+
+	if o.highlight.Adornee ~= char then
+		o.highlight.Adornee = char
+	end
+	if o.billboard.Adornee ~= head then
+		o.billboard.Adornee = head
+	end
+	o.highlight.FillColor = color
+	o.highlight.OutlineColor = color
+	o.label.TextColor3 = color
+
+	local myChar = player.Character
+	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
+	local distance = myRoot and (myRoot.Position - head.Position).Magnitude or 0
+
+	o.label.Text = string.format(
+		"%s  [%dm]\nHP %d / %d",
+		plr.Name,
+		math.floor(distance + 0.5),
+		math.floor(hum.Health + 0.5),
+		math.floor(hum.MaxHealth + 0.5)
+	)
+end
+
+Players.PlayerRemoving:Connect(removeEsp)
+
+--------------------------------------------------------------------
+-- SHARED UPDATE LOOP (fullbright refresh + ESP refresh, throttled)
+--------------------------------------------------------------------
+
+do
+	local accumulator = 0
+	RunService.Heartbeat:Connect(function(dt)
+		accumulator = accumulator + dt
+		if accumulator < 0.1 then
+			return
+		end
+		accumulator = 0
+
+		if state.Fullbright then
+			pushFullbright()
+		end
+
+		if state.ESP then
+			for _, plr in ipairs(Players:GetPlayers()) do
+				if plr ~= player then
+					updateEspFor(plr)
+				end
+			end
+			-- drop tags belonging to players who already left
+			for plr in pairs(espObjects) do
+				if plr.Parent == nil then
+					removeEsp(plr)
+				end
+			end
+		end
+	end)
+end
+
+--------------------------------------------------------------------
+-- NEW TOGGLE BUTTONS
+--------------------------------------------------------------------
+
+local function makeToggle(order, name, labelText)
+	local btn = Instance.new("TextButton")
+	btn.Name = name
+	btn.LayoutOrder = order
+	btn.Size = UDim2.new(1, 0, 0, 42)
+	btn.BackgroundColor3 = THEME.off
+	btn.Text = labelText .. ": OFF"
+	btn.TextColor3 = THEME.text
+	btn.TextSize = 15
+	btn.Font = Enum.Font.GothamBold
+	btn.Parent = panel
+	corner(btn, 10)
+	return btn
+end
+
+local fullbrightBtn = makeToggle(4, "FullbrightToggle", "Fullbright")
+local espBtn = makeToggle(5, "ESPToggle", "ESP Players")
+
+local function setFullbright(on)
+	state.Fullbright = on
+	fullbrightBtn.Text = on and "Fullbright: ON" or "Fullbright: OFF"
+	fullbrightBtn.BackgroundColor3 = on and THEME.on or THEME.off
+	if on then
+		backupLighting()
+		pushFullbright()
+	else
+		restoreLighting()
+	end
+end
+
+local function setESP(on)
+	state.ESP = on
+	espBtn.Text = on and "ESP Players: ON" or "ESP Players: OFF"
+	espBtn.BackgroundColor3 = on and THEME.on or THEME.off
+	if not on then
+		clearEsp()
+	end
+end
+
+fullbrightBtn.Activated:Connect(function()
+	setFullbright(not state.Fullbright)
+end)
+
+espBtn.Activated:Connect(function()
+	setESP(not state.ESP)
+end)
+
+-- Keybind cheat-sheet inside the panel
+local hint = Instance.new("TextLabel")
+hint.Name = "Hotkeys"
+hint.LayoutOrder = 8
+hint.Size = UDim2.new(1, 0, 0, 30)
+hint.BackgroundTransparency = 1
+hint.Text = "Keys:  RightShift panel  |  N noclip\nB fullbright  |  V ESP"
+hint.TextColor3 = THEME.muted
+hint.TextSize = 12
+hint.Font = Enum.Font.Gotham
+hint.TextXAlignment = Enum.TextXAlignment.Left
+hint.Parent = panel
+
+-- Reset also clears the two new toggles.
+resetBtn.Activated:Connect(function()
+	setFullbright(false)
+	setESP(false)
+end)
+
+--------------------------------------------------------------------
+-- HOTKEYS
+--------------------------------------------------------------------
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed or UserInputService:GetFocusedTextBox() then
+		return
+	end
+	if input.KeyCode == Enum.KeyCode.N then
+		setNoclip(not state.Noclip)
+	elseif input.KeyCode == Enum.KeyCode.B then
+		setFullbright(not state.Fullbright)
+	elseif input.KeyCode == Enum.KeyCode.V then
+		setESP(not state.ESP)
+	end
+end)
