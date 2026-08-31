@@ -1,0 +1,287 @@
+local LINK = "https://link-target.net/1417470/g6eKEoq2bJV9"
+local MAIN_SCRIPT = "https://raw.githubusercontent.com/morenoffproScriptsRoblox/ReaperAim/refs/heads/main/README.md"
+
+local player = game.Players.LocalPlayer
+local gui = Instance.new("ScreenGui")
+gui.Name = "NeonKeySystem"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = player:WaitForChild("PlayerGui")
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.Size = UDim2.new(0, 400, 0, 300)
+mainFrame.Position = UDim2.new(0.5, -200, 0.5, -150)
+mainFrame.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
+mainFrame.BackgroundTransparency = 0.05
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = false
+mainFrame.Draggable = false
+mainFrame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 4)
+corner.Parent = mainFrame
+
+local border = Instance.new("UIStroke")
+border.Color = Color3.fromRGB(0, 255, 200)
+border.Transparency = 0.6
+border.Thickness = 2
+border.Parent = mainFrame
+
+for i = 1, 10 do
+    local line = Instance.new("Frame")
+    line.Size = UDim2.new(1, 0, 0, 1)
+    line.Position = UDim2.new(0, 0, 0, i * 30)
+    line.BackgroundColor3 = Color3.fromRGB(0, 255, 200)
+    line.BackgroundTransparency = 0.95
+    line.BorderSizePixel = 0
+    line.Parent = mainFrame
+end
+
+local accentBar = Instance.new("Frame")
+accentBar.Size = UDim2.new(1, 0, 0, 3)
+accentBar.BackgroundColor3 = Color3.fromRGB(0, 255, 200)
+accentBar.BorderSizePixel = 0
+accentBar.Parent = mainFrame
+
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.Size = UDim2.new(1, 0, 0, 45)
+title.Position = UDim2.new(0, 0, 0, 15)
+title.BackgroundTransparency = 1
+title.Text = ">> ACCESS TERMINAL <<"
+title.TextColor3 = Color3.fromRGB(0, 255, 200)
+title.TextScaled = true
+title.Font = Enum.Font.Code
+title.Parent = mainFrame
+
+local subtitle = Instance.new("TextLabel")
+subtitle.Name = "Subtitle"
+subtitle.Size = UDim2.new(1, 0, 0, 20)
+subtitle.Position = UDim2.new(0, 0, 0, 55)
+subtitle.BackgroundTransparency = 1
+subtitle.Text = "// ENTER AUTHORIZATION KEY //"
+subtitle.TextColor3 = Color3.fromRGB(100, 100, 120)
+subtitle.TextScaled = true
+subtitle.Font = Enum.Font.Code
+subtitle.Parent = mainFrame
+
+local inputContainer = Instance.new("Frame")
+inputContainer.Name = "InputContainer"
+inputContainer.Size = UDim2.new(0.8, 0, 0, 50)
+inputContainer.Position = UDim2.new(0.1, 0, 0.38, 0)
+inputContainer.BackgroundColor3 = Color3.fromRGB(5, 5, 10)
+inputContainer.BackgroundTransparency = 0.2
+inputContainer.BorderSizePixel = 0
+inputContainer.Parent = mainFrame
+
+local inputCorner = Instance.new("UICorner")
+inputCorner.CornerRadius = UDim.new(0, 2)
+inputCorner.Parent = inputContainer
+
+local inputBorder = Instance.new("UIStroke")
+inputBorder.Color = Color3.fromRGB(0, 255, 200)
+inputBorder.Transparency = 0.5
+inputBorder.Thickness = 1
+inputBorder.Parent = inputContainer
+
+local cursor = Instance.new("Frame")
+cursor.Size = UDim2.new(0, 2, 0, 20)
+cursor.Position = UDim2.new(0, 15, 0.5, -10)
+cursor.BackgroundColor3 = Color3.fromRGB(0, 255, 200)
+cursor.BorderSizePixel = 0
+cursor.Parent = inputContainer
+
+spawn(function()
+    while cursor do
+        cursor.Visible = not cursor.Visible
+        task.wait(0.5)
+    end
+end)
+
+local inputBox = Instance.new("TextBox")
+inputBox.Name = "KeyInput"
+inputBox.Size = UDim2.new(1, -20, 1, 0)
+inputBox.Position = UDim2.new(0, 20, 0, 0)
+inputBox.BackgroundTransparency = 1
+inputBox.Text = ""
+inputBox.PlaceholderText = "KEY_"
+inputBox.TextColor3 = Color3.fromRGB(0, 255, 200)
+inputBox.PlaceholderColor3 = Color3.fromRGB(0, 200, 150)
+inputBox.TextTransparency = 0.2
+inputBox.TextScaled = true
+inputBox.Font = Enum.Font.Code
+inputBox.ClearTextOnFocus = false
+inputBox.Parent = inputContainer
+
+local buttonContainer = Instance.new("Frame")
+buttonContainer.Name = "ButtonContainer"
+buttonContainer.Size = UDim2.new(0.8, 0, 0, 50)
+buttonContainer.Position = UDim2.new(0.1, 0, 0.6, 0)
+buttonContainer.BackgroundTransparency = 1
+buttonContainer.Parent = mainFrame
+
+local getKeyBtn = Instance.new("TextButton")
+getKeyBtn.Name = "GetKeyBtn"
+getKeyBtn.Size = UDim2.new(0.45, -5, 1, 0)
+getKeyBtn.Position = UDim2.new(0, 0, 0, 0)
+getKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 20, 30)
+getKeyBtn.BackgroundTransparency = 0.3
+getKeyBtn.Text = "[ GET KEY ]"
+getKeyBtn.TextColor3 = Color3.fromRGB(0, 255, 200)
+getKeyBtn.TextScaled = true
+getKeyBtn.Font = Enum.Font.Code
+getKeyBtn.Parent = buttonContainer
+
+local getKeyCorner = Instance.new("UICorner")
+getKeyCorner.CornerRadius = UDim.new(0, 2)
+getKeyCorner.Parent = getKeyBtn
+
+local getKeyBorder = Instance.new("UIStroke")
+getKeyBorder.Color = Color3.fromRGB(0, 255, 200)
+getKeyBorder.Transparency = 0.4
+getKeyBorder.Thickness = 1
+getKeyBorder.Parent = getKeyBtn
+
+local checkKeyBtn = Instance.new("TextButton")
+checkKeyBtn.Name = "CheckKeyBtn"
+checkKeyBtn.Size = UDim2.new(0.45, -5, 1, 0)
+checkKeyBtn.Position = UDim2.new(0.55, 0, 0, 0)
+checkKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 30, 20)
+checkKeyBtn.BackgroundTransparency = 0.3
+checkKeyBtn.Text = "[ AUTH ]"
+checkKeyBtn.TextColor3 = Color3.fromRGB(0, 255, 200)
+checkKeyBtn.TextScaled = true
+checkKeyBtn.Font = Enum.Font.Code
+checkKeyBtn.Parent = buttonContainer
+
+local checkKeyCorner = Instance.new("UICorner")
+checkKeyCorner.CornerRadius = UDim.new(0, 2)
+checkKeyCorner.Parent = checkKeyBtn
+
+local checkKeyBorder = Instance.new("UIStroke")
+checkKeyBorder.Color = Color3.fromRGB(0, 255, 200)
+checkKeyBorder.Transparency = 0.4
+checkKeyBorder.Thickness = 1
+checkKeyBorder.Parent = checkKeyBtn
+
+local statusFrame = Instance.new("Frame")
+statusFrame.Name = "StatusFrame"
+statusFrame.Size = UDim2.new(0.8, 0, 0, 35)
+statusFrame.Position = UDim2.new(0.1, 0, 0.82, 0)
+statusFrame.BackgroundColor3 = Color3.fromRGB(5, 5, 10)
+statusFrame.BackgroundTransparency = 0.3
+statusFrame.BorderSizePixel = 0
+statusFrame.Visible = false
+statusFrame.Parent = mainFrame
+
+local statusCorner = Instance.new("UICorner")
+statusCorner.CornerRadius = UDim.new(0, 2)
+statusCorner.Parent = statusFrame
+
+local statusBorder = Instance.new("UIStroke")
+statusBorder.Color = Color3.fromRGB(0, 255, 200)
+statusBorder.Transparency = 0.6
+statusBorder.Thickness = 1
+statusBorder.Parent = statusFrame
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Name = "StatusLabel"
+statusLabel.Size = UDim2.new(1, -10, 1, 0)
+statusLabel.Position = UDim2.new(0, 10, 0, 0)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = ""
+statusLabel.TextColor3 = Color3.fromRGB(0, 255, 200)
+statusLabel.TextScaled = true
+statusLabel.Font = Enum.Font.Code
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Parent = statusFrame
+
+local loadingText = Instance.new("TextLabel")
+loadingText.Name = "LoadingText"
+loadingText.Size = UDim2.new(1, 0, 0, 20)
+loadingText.Position = UDim2.new(0, 0, 0.82, 0)
+loadingText.BackgroundTransparency = 1
+loadingText.Text = ">> AUTHENTICATING..."
+loadingText.TextColor3 = Color3.fromRGB(0, 255, 200)
+loadingText.TextScaled = true
+loadingText.Font = Enum.Font.Code
+loadingText.Visible = false
+loadingText.Parent = mainFrame
+
+local function showStatus(message, color, duration)
+    statusFrame.Visible = true
+    statusLabel.Text = ">> " .. message
+    statusLabel.TextColor3 = color
+    statusBorder.Color = color
+    loadingText.Visible = false
+    
+    if duration then
+        task.wait(duration)
+        statusFrame.Visible = false
+    end
+end
+
+local function showLoading()
+    statusFrame.Visible = false
+    loadingText.Visible = true
+    task.wait(0.3)
+end
+
+getKeyBtn.MouseEnter:Connect(function()
+    getKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 40, 50)
+    getKeyBorder.Transparency = 0.1
+end)
+
+getKeyBtn.MouseLeave:Connect(function()
+    getKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 20, 30)
+    getKeyBorder.Transparency = 0.4
+end)
+
+checkKeyBtn.MouseEnter:Connect(function()
+    checkKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 50, 40)
+    checkKeyBorder.Transparency = 0.1
+end)
+
+checkKeyBtn.MouseLeave:Connect(function()
+    checkKeyBtn.BackgroundColor3 = Color3.fromRGB(0, 30, 20)
+    checkKeyBorder.Transparency = 0.4
+end)
+
+-- NOW AT THE BOTTOM - KEY IS HIDDEN HERE
+local KEY = string.reverse("xskula") -- This is "aluksx" reversed
+
+getKeyBtn.MouseButton1Click:Connect(function()
+    setclipboard(LINK)
+    showStatus("KEY COPIED TO CLIPBOARD", Color3.fromRGB(0, 255, 200), 1.5)
+end)
+
+checkKeyBtn.MouseButton1Click:Connect(function()
+    local enteredKey = inputBox.Text:lower()
+    
+    if enteredKey == KEY then
+        showLoading()
+        showStatus("ACCESS GRANTED - LOADING...", Color3.fromRGB(0, 255, 100), 0.5)
+        task.wait(0.3)
+        
+        gui:Destroy()
+        
+        local success, err = pcall(function()
+            loadstring(game:HttpGet(MAIN_SCRIPT, true))()
+        end)
+        
+        if not success then
+            warn("Failed to load main script: " .. tostring(err))
+        end
+    else
+        showStatus("ACCESS DENIED - INVALID KEY", Color3.fromRGB(255, 50, 50), 5)
+        inputBox.Text = ""
+    end
+end)
+
+inputBox.FocusLost:Connect(function(enterPressed)
+    if enterPressed then
+        checkKeyBtn.MouseButton1Click:Fire()
+    end
+end)
