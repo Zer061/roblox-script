@@ -1,20 +1,28 @@
 --[[
-	Player Tweaks Panel
-	-------------------
-	A LocalScript that shows a small draggable GUI for adjusting
-	WalkSpeed, Jump (Power or Height), and toggling Noclip.
+	Player Tweaks Panel  (compact / tabbed)
+	---------------------------------------
+	A LocalScript with a small draggable GUI split into three tabs:
+
+		MOVE    WalkSpeed, Jump, Field of View, Noclip
+		VIEW    Fullbright, ESP on other players
+		KEY     Object ESP (find "redkey" and friends) + scan rate
 
 	WHERE TO PUT IT:
 		StarterPlayer > StarterPlayerScripts   (recommended)
 		or StarterGui (as a LocalScript inside a ScreenGui)
 
-	Works on PC and mobile (touch drag + big tap targets).
-	Settings are re-applied automatically after respawn.
+	HOTKEYS:
+		RightShift  show / hide panel      N  noclip
+		B  fullbright                      V  player ESP
+		K  key ESP                         [ ]  narrow / wide FOV
+
+	Works on PC and mobile. Settings survive respawn.
 --]]
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
 
 local player = Players.LocalPlayer
 
@@ -26,17 +34,29 @@ local DEFAULTS = {
 	WalkSpeed = 16,
 	JumpPower = 50,
 	JumpHeight = 7.2,
+	FOV = 70,
+	KeyQuery = "redkey",
+	ScanInterval = 1,
 }
+
+local startCam = workspace.CurrentCamera
 
 local state = {
 	WalkSpeed = DEFAULTS.WalkSpeed,
 	JumpPower = DEFAULTS.JumpPower,
 	JumpHeight = DEFAULTS.JumpHeight,
+	FOV = startCam and startCam.FieldOfView or DEFAULTS.FOV,
 	Noclip = false,
+	Fullbright = false,
+	ESP = false,
+	KeyESP = false,
+	ScanInterval = DEFAULTS.ScanInterval, -- seconds between workspace sweeps
 }
 
-local rows = {} -- key -> { textBox = TextBox, ... } for refreshing displayed values
-local originalCollide = {} -- BasePart -> original CanCollide, used to restore after noclip
+local keyQuery = DEFAULTS.KeyQuery -- lowercase substring used by the key scanner
+
+local rows = {} -- key -> refresh function, so Reset can repaint every number
+local originalCollide = {} -- BasePart -> original CanCollide
 
 --------------------------------------------------------------------
 -- CHARACTER HELPERS
@@ -114,7 +134,7 @@ player.CharacterAdded:Connect(function(char)
 end)
 
 --------------------------------------------------------------------
--- UI THEME
+-- UI THEME  (all sizing/font numbers live here)
 --------------------------------------------------------------------
 
 local THEME = {
@@ -126,11 +146,38 @@ local THEME = {
 	accent = Color3.fromRGB(88, 140, 255),
 	on = Color3.fromRGB(56, 176, 108),
 	off = Color3.fromRGB(70, 74, 88),
+	key = Color3.fromRGB(255, 205, 60),
+	enemy = Color3.fromRGB(255, 78, 78),
+	ally = Color3.fromRGB(74, 210, 130),
+}
+
+local SIZE = {
+	panelW = 244,
+	panelH = 260,
+	pad = 8,
+	gap = 6,
+	titleH = 18,
+	tabH = 22,
+	pageH = 132,
+	rowH = 26,
+	hintH = 24,
+	resetH = 24,
+	labelW = 86,
+}
+
+local FONTSIZE = {
+	title = 13,
+	tab = 11,
+	label = 11,
+	value = 11,
+	toggle = 12,
+	hint = 10,
+	reset = 11,
 }
 
 local function corner(parent, radius)
 	local c = Instance.new("UICorner")
-	c.CornerRadius = UDim.new(0, radius or 8)
+	c.CornerRadius = UDim.new(0, radius or 6)
 	c.Parent = parent
 	return c
 end
@@ -144,7 +191,7 @@ local function stroke(parent, color, thickness)
 end
 
 --------------------------------------------------------------------
--- BUILD GUI
+-- BUILD GUI SHELL
 --------------------------------------------------------------------
 
 local gui = Instance.new("ScreenGui")
@@ -157,126 +204,199 @@ gui.Parent = player:WaitForChild("PlayerGui")
 -- Small floating button that shows/hides the panel
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Name = "ToggleButton"
-toggleBtn.Size = UDim2.fromOffset(52, 52)
-toggleBtn.Position = UDim2.new(0, 16, 0, 90)
+toggleBtn.Size = UDim2.fromOffset(40, 40)
+toggleBtn.Position = UDim2.new(0, 14, 0, 90)
 toggleBtn.BackgroundColor3 = THEME.accent
 toggleBtn.Text = "\u{2699}"
-toggleBtn.TextSize = 26
+toggleBtn.TextSize = 20
 toggleBtn.TextColor3 = Color3.new(1, 1, 1)
 toggleBtn.Font = Enum.Font.GothamBold
 toggleBtn.AutoButtonColor = true
 toggleBtn.Parent = gui
-corner(toggleBtn, 26)
+corner(toggleBtn, 20)
 
 local panel = Instance.new("Frame")
 panel.Name = "Panel"
-panel.Size = UDim2.fromOffset(288, 452)
-panel.Position = UDim2.new(0, 80, 0, 90)
+panel.Size = UDim2.fromOffset(SIZE.panelW, SIZE.panelH)
+panel.Position = UDim2.new(0, 64, 0, 90)
 panel.BackgroundColor3 = THEME.bg
 panel.BorderSizePixel = 0
 panel.Active = true
 panel.Visible = false
 panel.Parent = gui
-corner(panel, 12)
+corner(panel, 10)
 stroke(panel)
 
 local layout = Instance.new("UIListLayout")
-layout.Padding = UDim.new(0, 8)
+layout.Padding = UDim.new(0, SIZE.gap)
 layout.SortOrder = Enum.SortOrder.LayoutOrder
 layout.Parent = panel
 
 local padding = Instance.new("UIPadding")
-padding.PaddingTop = UDim.new(0, 10)
-padding.PaddingBottom = UDim.new(0, 10)
-padding.PaddingLeft = UDim.new(0, 10)
-padding.PaddingRight = UDim.new(0, 10)
+padding.PaddingTop = UDim.new(0, SIZE.pad)
+padding.PaddingBottom = UDim.new(0, SIZE.pad)
+padding.PaddingLeft = UDim.new(0, SIZE.pad)
+padding.PaddingRight = UDim.new(0, SIZE.pad)
 padding.Parent = panel
 
 -- Title bar (also the drag handle)
 local title = Instance.new("TextLabel")
 title.Name = "Title"
 title.LayoutOrder = 0
-title.Size = UDim2.new(1, 0, 0, 26)
+title.Size = UDim2.new(1, 0, 0, SIZE.titleH)
 title.BackgroundTransparency = 1
 title.Text = "Player Tweaks"
 title.TextColor3 = THEME.text
-title.TextSize = 17
+title.TextSize = FONTSIZE.title
 title.Font = Enum.Font.GothamBold
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Parent = panel
 
 --------------------------------------------------------------------
--- ROW BUILDER: label + [-] [value] [+]
+-- TABS
 --------------------------------------------------------------------
 
-local function clamp(value, min, max)
-	return math.clamp(value, min, max)
+local tabBar = Instance.new("Frame")
+tabBar.Name = "TabBar"
+tabBar.LayoutOrder = 1
+tabBar.Size = UDim2.new(1, 0, 0, SIZE.tabH)
+tabBar.BackgroundTransparency = 1
+tabBar.Parent = panel
+
+local tabLayout = Instance.new("UIListLayout")
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Padding = UDim.new(0, 4)
+tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+tabLayout.Parent = tabBar
+
+local pageHolder = Instance.new("Frame")
+pageHolder.Name = "Pages"
+pageHolder.LayoutOrder = 2
+pageHolder.Size = UDim2.new(1, 0, 0, SIZE.pageH)
+pageHolder.BackgroundTransparency = 1
+pageHolder.ClipsDescendants = true
+pageHolder.Parent = panel
+
+local tabs = {} -- name -> { button = TextButton, page = Frame }
+
+local function selectTab(name)
+	for tabName, t in pairs(tabs) do
+		local selected = (tabName == name)
+		t.page.Visible = selected
+		t.button.BackgroundColor3 = selected and THEME.accent or THEME.panel
+		t.button.TextColor3 = selected and Color3.new(1, 1, 1) or THEME.muted
+	end
 end
 
-local function createRow(order, labelText, key, min, max, step, decimals)
+local function createTab(order, name)
+	local button = Instance.new("TextButton")
+	button.Name = name .. "Tab"
+	button.LayoutOrder = order
+	button.Size = UDim2.new(1 / 3, -3, 1, 0)
+	button.BackgroundColor3 = THEME.panel
+	button.Text = name
+	button.TextColor3 = THEME.muted
+	button.TextSize = FONTSIZE.tab
+	button.Font = Enum.Font.GothamBold
+	button.AutoButtonColor = false
+	button.Parent = tabBar
+	corner(button, 6)
+
+	local page = Instance.new("Frame")
+	page.Name = name .. "Page"
+	page.Size = UDim2.fromScale(1, 1)
+	page.BackgroundTransparency = 1
+	page.Visible = false
+	page.Parent = pageHolder
+
+	local pageList = Instance.new("UIListLayout")
+	pageList.Padding = UDim.new(0, SIZE.gap)
+	pageList.SortOrder = Enum.SortOrder.LayoutOrder
+	pageList.Parent = page
+
+	tabs[name] = { button = button, page = page }
+	button.Activated:Connect(function()
+		selectTab(name)
+	end)
+
+	return page
+end
+
+local movePage = createTab(1, "MOVE")
+local viewPage = createTab(2, "VIEW")
+local keyPage = createTab(3, "KEY")
+
+--------------------------------------------------------------------
+-- CONTROL BUILDERS
+--------------------------------------------------------------------
+
+-- One compact line:  label   [-] [ value ] [+]
+-- Returns a setter so hotkeys can drive the same value.
+local function numberRow(parent, order, labelText, key, min, max, step, decimals, onChanged)
 	local row = Instance.new("Frame")
 	row.Name = key .. "Row"
 	row.LayoutOrder = order
-	row.Size = UDim2.new(1, 0, 0, 56)
+	row.Size = UDim2.new(1, 0, 0, SIZE.rowH)
 	row.BackgroundColor3 = THEME.panel
 	row.BorderSizePixel = 0
-	row.Parent = panel
-	corner(row, 10)
+	row.Parent = parent
+	corner(row, 6)
 
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.new(1, -16, 0, 18)
-	label.Position = UDim2.fromOffset(10, 5)
+	label.Size = UDim2.new(0, SIZE.labelW, 1, 0)
+	label.Position = UDim2.fromOffset(6, 0)
 	label.BackgroundTransparency = 1
 	label.Text = labelText
 	label.TextColor3 = THEME.muted
-	label.TextSize = 13
+	label.TextSize = FONTSIZE.label
 	label.Font = Enum.Font.Gotham
 	label.TextXAlignment = Enum.TextXAlignment.Left
 	label.Parent = row
 
 	local minus = Instance.new("TextButton")
-	minus.Size = UDim2.fromOffset(30, 28)
-	minus.Position = UDim2.fromOffset(10, 23)
+	minus.Size = UDim2.fromOffset(22, 20)
+	minus.Position = UDim2.fromOffset(SIZE.labelW + 6, 3)
 	minus.BackgroundColor3 = THEME.off
 	minus.Text = "-"
 	minus.TextColor3 = THEME.text
-	minus.TextSize = 20
+	minus.TextSize = 15
 	minus.Font = Enum.Font.GothamBold
 	minus.Parent = row
-	corner(minus, 8)
+	corner(minus, 5)
 
 	local plus = Instance.new("TextButton")
-	plus.Size = UDim2.fromOffset(30, 28)
-	plus.Position = UDim2.new(1, -40, 0, 23)
+	plus.Size = UDim2.fromOffset(22, 20)
+	plus.Position = UDim2.new(1, -28, 0, 3)
 	plus.BackgroundColor3 = THEME.off
 	plus.Text = "+"
 	plus.TextColor3 = THEME.text
-	plus.TextSize = 20
+	plus.TextSize = 15
 	plus.Font = Enum.Font.GothamBold
 	plus.Parent = row
-
-	corner(plus, 8)
+	corner(plus, 5)
 
 	local box = Instance.new("TextBox")
-	box.Size = UDim2.new(1, -100, 0, 28)
-	box.Position = UDim2.fromOffset(46, 23)
+	box.Size = UDim2.new(1, -(SIZE.labelW + 62), 0, 20)
+	box.Position = UDim2.fromOffset(SIZE.labelW + 32, 3)
 	box.BackgroundColor3 = THEME.bg
 	box.Text = ""
 	box.TextColor3 = THEME.text
-	box.TextSize = 15
+	box.TextSize = FONTSIZE.value
 	box.Font = Enum.Font.GothamMedium
 	box.ClearTextOnFocus = false
 	box.Parent = row
-	corner(box, 8)
+	corner(box, 5)
 
 	local function refresh()
 		box.Text = string.format("%." .. tostring(decimals) .. "f", state[key])
 	end
 
 	local function setValue(v)
-		state[key] = clamp(v, min, max)
+		state[key] = math.clamp(v, min, max)
 		refresh()
-		applyStats()
+		if onChanged then
+			onChanged(state[key])
+		end
 	end
 
 	minus.Activated:Connect(function()
@@ -296,40 +416,108 @@ local function createRow(order, labelText, key, min, max, step, decimals)
 
 	refresh()
 	rows[key] = refresh
-	return row
+	return setValue
 end
 
-createRow(1, "Walk Speed", "WalkSpeed", 0, 500, 2, 0)
+-- One compact line:  label   [ free text ]
+local function textRow(parent, order, labelText, initial, placeholder, onCommit)
+	local row = Instance.new("Frame")
+	row.Name = string.gsub(labelText, "%s", "") .. "Row"
+	row.LayoutOrder = order
+	row.Size = UDim2.new(1, 0, 0, SIZE.rowH)
+	row.BackgroundColor3 = THEME.panel
+	row.BorderSizePixel = 0
+	row.Parent = parent
+	corner(row, 6)
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(0, SIZE.labelW, 1, 0)
+	label.Position = UDim2.fromOffset(6, 0)
+	label.BackgroundTransparency = 1
+	label.Text = labelText
+	label.TextColor3 = THEME.muted
+	label.TextSize = FONTSIZE.label
+	label.Font = Enum.Font.Gotham
+	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.Parent = row
+
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.new(1, -(SIZE.labelW + 12), 0, 20)
+	box.Position = UDim2.fromOffset(SIZE.labelW + 6, 3)
+	box.BackgroundColor3 = THEME.bg
+	box.Text = initial
+	box.PlaceholderText = placeholder
+	box.TextColor3 = THEME.text
+	box.TextSize = FONTSIZE.value
+	box.Font = Enum.Font.GothamMedium
+	box.ClearTextOnFocus = false
+	box.Parent = row
+	corner(box, 5)
+
+	box.FocusLost:Connect(function()
+		box.Text = onCommit(box.Text)
+	end)
+
+	return box
+end
+
+local function toggleButton(parent, order, labelText)
+	local btn = Instance.new("TextButton")
+	btn.Name = string.gsub(labelText, "%s", "") .. "Toggle"
+	btn.LayoutOrder = order
+	btn.Size = UDim2.new(1, 0, 0, SIZE.rowH)
+	btn.BackgroundColor3 = THEME.off
+	btn.Text = labelText .. ": OFF"
+	btn.TextColor3 = THEME.text
+	btn.TextSize = FONTSIZE.toggle
+	btn.Font = Enum.Font.GothamBold
+	btn.Parent = parent
+	corner(btn, 6)
+	return btn
+end
+
+local function paintToggle(btn, labelText, on)
+	btn.Text = labelText .. (on and ": ON" or ": OFF")
+	btn.BackgroundColor3 = on and THEME.on or THEME.off
+end
+
+--------------------------------------------------------------------
+-- MOVE TAB
+--------------------------------------------------------------------
+
+numberRow(movePage, 1, "Walk Speed", "WalkSpeed", 0, 500, 2, 0, applyStats)
 
 -- Show the jump control that matches this game's jump system.
-local hum = getHumanoid()
-local usesJumpPower = (hum == nil) or hum.UseJumpPower
-if usesJumpPower then
-	createRow(2, "Jump Power", "JumpPower", 0, 500, 5, 0)
+local startHum = getHumanoid()
+if (startHum == nil) or startHum.UseJumpPower then
+	numberRow(movePage, 2, "Jump Power", "JumpPower", 0, 500, 5, 0, applyStats)
 else
-	createRow(2, "Jump Height", "JumpHeight", 0, 100, 1, 1)
+	numberRow(movePage, 2, "Jump Height", "JumpHeight", 0, 100, 1, 1, applyStats)
 end
 
---------------------------------------------------------------------
--- NOCLIP TOGGLE
---------------------------------------------------------------------
+-- Field of view: low = narrow / zoomed in, high = wide angle.
+local fovOverride = false -- flips true the moment the user touches FOV
 
-local noclipBtn = Instance.new("TextButton")
-noclipBtn.Name = "NoclipToggle"
-noclipBtn.LayoutOrder = 3
-noclipBtn.Size = UDim2.new(1, 0, 0, 42)
-noclipBtn.BackgroundColor3 = THEME.off
-noclipBtn.Text = "Noclip: OFF"
-noclipBtn.TextColor3 = THEME.text
-noclipBtn.TextSize = 15
-noclipBtn.Font = Enum.Font.GothamBold
-noclipBtn.Parent = panel
-corner(noclipBtn, 10)
+local setFOV = numberRow(movePage, 3, "Field of View", "FOV", 1, 120, 5, 0, function()
+	fovOverride = true
+end)
+
+-- Hold the chosen FOV even if the game keeps writing its own.
+RunService.RenderStepped:Connect(function()
+	if not fovOverride then
+		return
+	end
+	local cam = workspace.CurrentCamera
+	if cam and math.abs(cam.FieldOfView - state.FOV) > 0.01 then
+		cam.FieldOfView = state.FOV
+	end
+end)
+
+local noclipBtn = toggleButton(movePage, 4, "Noclip")
 
 local function setNoclip(on)
 	state.Noclip = on
-	noclipBtn.Text = on and "Noclip: ON" or "Noclip: OFF"
-	noclipBtn.BackgroundColor3 = on and THEME.on or THEME.off
+	paintToggle(noclipBtn, "Noclip", on)
 	if on then
 		snapshotCollisions()
 	else
@@ -342,101 +530,8 @@ noclipBtn.Activated:Connect(function()
 end)
 
 --------------------------------------------------------------------
--- RESET
+-- VIEW TAB: FULLBRIGHT
 --------------------------------------------------------------------
-
-local resetBtn = Instance.new("TextButton")
-resetBtn.Name = "Reset"
-resetBtn.LayoutOrder = 9
-resetBtn.Size = UDim2.new(1, 0, 0, 36)
-resetBtn.BackgroundColor3 = THEME.panel
-resetBtn.Text = "Reset to default"
-resetBtn.TextColor3 = THEME.muted
-resetBtn.TextSize = 14
-resetBtn.Font = Enum.Font.Gotham
-resetBtn.Parent = panel
-corner(resetBtn, 10)
-
-resetBtn.Activated:Connect(function()
-	state.WalkSpeed = DEFAULTS.WalkSpeed
-	state.JumpPower = DEFAULTS.JumpPower
-	state.JumpHeight = DEFAULTS.JumpHeight
-	for _, refresh in pairs(rows) do
-		refresh()
-	end
-	setNoclip(false)
-	applyStats()
-end)
-
---------------------------------------------------------------------
--- SHOW / HIDE + DRAGGING (mouse and touch)
---------------------------------------------------------------------
-
-toggleBtn.Activated:Connect(function()
-	panel.Visible = not panel.Visible
-end)
-
--- Optional keyboard shortcut on PC
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed then
-		return
-	end
-	if input.KeyCode == Enum.KeyCode.RightShift then
-		panel.Visible = not panel.Visible
-	end
-end)
-
-do
-	local dragging, dragStart, startPos = false, nil, nil
-
-	local function beginDrag(input)
-		dragging = true
-		dragStart = input.Position
-		startPos = panel.Position
-		input.Changed:Connect(function()
-			if input.UserInputState == Enum.UserInputState.End then
-				dragging = false
-			end
-		end)
-	end
-
-	title.InputBegan:Connect(function(input)
-		if
-			input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
-			beginDrag(input)
-		end
-	end)
-
-	UserInputService.InputChanged:Connect(function(input)
-		if not dragging then
-			return
-		end
-		if
-			input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch
-		then
-			local delta = input.Position - dragStart
-			panel.Position = UDim2.new(
-				startPos.X.Scale,
-				startPos.X.Offset + delta.X,
-				startPos.Y.Scale,
-				startPos.Y.Offset + delta.Y
-			)
-		end
-	end)
-end
-
-applyStats()
-
---------------------------------------------------------------------
--- FULLBRIGHT
---------------------------------------------------------------------
-
-local Lighting = game:GetService("Lighting")
-
-state.Fullbright = false
 
 local lightingBackup = nil -- saved once, restored when fullbright is turned off
 local atmosphereBackup = {} -- Atmosphere -> { Density, Haze, Glare }
@@ -468,8 +563,7 @@ local function backupLighting()
 	end
 end
 
--- Push the bright values in. Called on a loop so a game with a day/night
--- cycle cannot quietly write the darkness back.
+-- Called on a loop so a game with a day/night cycle cannot write the dark back.
 local function pushFullbright()
 	for prop, value in pairs(FULLBRIGHT) do
 		if Lighting[prop] ~= value then
@@ -503,20 +597,32 @@ local function restoreLighting()
 	table.clear(atmosphereBackup)
 end
 
---------------------------------------------------------------------
--- ESP: highlight other players + name / distance / health tag
---------------------------------------------------------------------
+local fullbrightBtn = toggleButton(viewPage, 1, "Fullbright")
 
-state.ESP = false
+local function setFullbright(on)
+	state.Fullbright = on
+	paintToggle(fullbrightBtn, "Fullbright", on)
+	if on then
+		backupLighting()
+		pushFullbright()
+	else
+		restoreLighting()
+	end
+end
+
+fullbrightBtn.Activated:Connect(function()
+	setFullbright(not state.Fullbright)
+end)
+
+--------------------------------------------------------------------
+-- VIEW TAB: PLAYER ESP
+--------------------------------------------------------------------
 
 local espHolder = Instance.new("Folder")
 espHolder.Name = "ESPHolder"
 espHolder.Parent = gui
 
 local espObjects = {} -- Player -> { highlight, billboard, label }
-
-local ESP_ENEMY = Color3.fromRGB(255, 78, 78)
-local ESP_ALLY = Color3.fromRGB(74, 210, 130)
 
 local function removeEsp(plr)
 	local o = espObjects[plr]
@@ -540,9 +646,9 @@ end
 
 local function espColor(plr)
 	if plr.Team and player.Team and plr.Team == player.Team then
-		return ESP_ALLY
+		return THEME.ally
 	end
-	return ESP_ENEMY
+	return THEME.enemy
 end
 
 local function createEsp(plr)
@@ -555,7 +661,7 @@ local function createEsp(plr)
 
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name = "Tag_" .. plr.Name
-	billboard.Size = UDim2.fromOffset(210, 34)
+	billboard.Size = UDim2.fromOffset(190, 30)
 	billboard.StudsOffset = Vector3.new(0, 2.6, 0)
 	billboard.AlwaysOnTop = true
 	billboard.MaxDistance = 5000
@@ -565,7 +671,7 @@ local function createEsp(plr)
 	label.Size = UDim2.fromScale(1, 1)
 	label.BackgroundTransparency = 1
 	label.Font = Enum.Font.GothamBold
-	label.TextSize = 13
+	label.TextSize = 12
 	label.TextStrokeTransparency = 0.4
 	label.TextStrokeColor3 = Color3.new(0, 0, 0)
 	label.Text = plr.Name
@@ -613,18 +719,29 @@ end
 
 Players.PlayerRemoving:Connect(removeEsp)
 
---------------------------------------------------------------------
--- SHARED UPDATE LOOP (fullbright refresh + ESP refresh, throttled)
---------------------------------------------------------------------
+local espBtn = toggleButton(viewPage, 2, "ESP Players")
 
+local function setESP(on)
+	state.ESP = on
+	paintToggle(espBtn, "ESP Players", on)
+	if not on then
+		clearEsp()
+	end
+end
+
+espBtn.Activated:Connect(function()
+	setESP(not state.ESP)
+end)
+
+-- Fullbright refresh + player ESP refresh share one 0.1s tick.
 do
-	local accumulator = 0
+	local clock = 0
 	RunService.Heartbeat:Connect(function(dt)
-		accumulator = accumulator + dt
-		if accumulator < 0.1 then
+		clock = clock + dt
+		if clock < 0.1 then
 			return
 		end
-		accumulator = 0
+		clock = 0
 
 		if state.Fullbright then
 			pushFullbright()
@@ -636,7 +753,6 @@ do
 					updateEspFor(plr)
 				end
 			end
-			-- drop tags belonging to players who already left
 			for plr in pairs(espObjects) do
 				if plr.Parent == nil then
 					removeEsp(plr)
@@ -647,106 +763,11 @@ do
 end
 
 --------------------------------------------------------------------
--- NEW TOGGLE BUTTONS
+-- KEY TAB: OBJECT ESP
 --------------------------------------------------------------------
 
-local function makeToggle(order, name, labelText)
-	local btn = Instance.new("TextButton")
-	btn.Name = name
-	btn.LayoutOrder = order
-	btn.Size = UDim2.new(1, 0, 0, 42)
-	btn.BackgroundColor3 = THEME.off
-	btn.Text = labelText .. ": OFF"
-	btn.TextColor3 = THEME.text
-	btn.TextSize = 15
-	btn.Font = Enum.Font.GothamBold
-	btn.Parent = panel
-	corner(btn, 10)
-	return btn
-end
-
-local fullbrightBtn = makeToggle(4, "FullbrightToggle", "Fullbright")
-local espBtn = makeToggle(5, "ESPToggle", "ESP Players")
-
-local function setFullbright(on)
-	state.Fullbright = on
-	fullbrightBtn.Text = on and "Fullbright: ON" or "Fullbright: OFF"
-	fullbrightBtn.BackgroundColor3 = on and THEME.on or THEME.off
-	if on then
-		backupLighting()
-		pushFullbright()
-	else
-		restoreLighting()
-	end
-end
-
-local function setESP(on)
-	state.ESP = on
-	espBtn.Text = on and "ESP Players: ON" or "ESP Players: OFF"
-	espBtn.BackgroundColor3 = on and THEME.on or THEME.off
-	if not on then
-		clearEsp()
-	end
-end
-
-fullbrightBtn.Activated:Connect(function()
-	setFullbright(not state.Fullbright)
-end)
-
-espBtn.Activated:Connect(function()
-	setESP(not state.ESP)
-end)
-
--- Keybind cheat-sheet inside the panel
-local hint = Instance.new("TextLabel")
-hint.Name = "Hotkeys"
-hint.LayoutOrder = 8
-hint.Size = UDim2.new(1, 0, 0, 30)
-hint.BackgroundTransparency = 1
-hint.Text = "Keys:  RightShift panel  |  N noclip\nB fullbright  |  V ESP"
-hint.TextColor3 = THEME.muted
-hint.TextSize = 12
-hint.Font = Enum.Font.Gotham
-hint.TextXAlignment = Enum.TextXAlignment.Left
-hint.Parent = panel
-
--- Reset also clears the two new toggles.
-resetBtn.Activated:Connect(function()
-	setFullbright(false)
-	setESP(false)
-end)
-
---------------------------------------------------------------------
--- HOTKEYS
---------------------------------------------------------------------
-
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed or UserInputService:GetFocusedTextBox() then
-		return
-	end
-	if input.KeyCode == Enum.KeyCode.N then
-		setNoclip(not state.Noclip)
-	elseif input.KeyCode == Enum.KeyCode.B then
-		setFullbright(not state.Fullbright)
-	elseif input.KeyCode == Enum.KeyCode.V then
-		setESP(not state.ESP)
-	end
-end)
-
---------------------------------------------------------------------
--- KEY / OBJECT ESP
---   Scans the workspace for instances whose name matches a keyword
---   (default "key"), highlights them through walls and puts a HUD
---   arrow on screen pointing at the closest one.
---------------------------------------------------------------------
-
-state.KeyESP = false
-
-local keyQuery = "redkey" -- lowercase, editable from the panel
 local keyObjects = {} -- Instance -> { highlight, billboard, label, part }
 local nearestKey = nil -- { part = BasePart, distance = number }
-
-local KEY_COLOR = Color3.fromRGB(255, 205, 60)
 
 local keyHolder = Instance.new("Folder")
 keyHolder.Name = "KeyESPHolder"
@@ -803,7 +824,7 @@ local function createKeyEsp(inst, part)
 	local highlight = Instance.new("Highlight")
 	highlight.Name = "KeyESP"
 	highlight.Adornee = inst:IsA("Model") and inst or part
-	highlight.FillColor = KEY_COLOR
+	highlight.FillColor = THEME.key
 	highlight.OutlineColor = Color3.new(1, 1, 1)
 	highlight.FillTransparency = 0.35
 	highlight.OutlineTransparency = 0
@@ -813,7 +834,7 @@ local function createKeyEsp(inst, part)
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name = "KeyTag"
 	billboard.Adornee = part
-	billboard.Size = UDim2.fromOffset(190, 30)
+	billboard.Size = UDim2.fromOffset(170, 26)
 	billboard.StudsOffset = Vector3.new(0, 2, 0)
 	billboard.AlwaysOnTop = true
 	billboard.MaxDistance = math.huge
@@ -823,8 +844,8 @@ local function createKeyEsp(inst, part)
 	label.Size = UDim2.fromScale(1, 1)
 	label.BackgroundTransparency = 1
 	label.Font = Enum.Font.GothamBold
-	label.TextSize = 14
-	label.TextColor3 = KEY_COLOR
+	label.TextSize = 13
+	label.TextColor3 = THEME.key
 	label.TextStrokeTransparency = 0.3
 	label.TextStrokeColor3 = Color3.new(0, 0, 0)
 	label.Text = inst.Name
@@ -835,12 +856,11 @@ local function createKeyEsp(inst, part)
 	return o
 end
 
--- Full workspace sweep. Runs on a slow timer because it is the expensive part.
+-- Full workspace sweep. The expensive part, so it runs on its own timer.
 local function scanForKeys()
 	local found = {}
 	for _, inst in ipairs(workspace:GetDescendants()) do
-		local name = string.lower(inst.Name)
-		if string.find(name, keyQuery, 1, true) and not isMine(inst) then
+		if string.find(string.lower(inst.Name), keyQuery, 1, true) and not isMine(inst) then
 			local part = anchorPart(inst)
 			if part then
 				found[inst] = part
@@ -862,11 +882,11 @@ local function scanForKeys()
 	end
 end
 
--- Refresh distances and work out which key is closest.
 local function refreshKeyTags()
 	local myChar = player.Character
 	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
-	local origin = myRoot and myRoot.Position or (workspace.CurrentCamera and workspace.CurrentCamera.CFrame.Position)
+	local cam = workspace.CurrentCamera
+	local origin = myRoot and myRoot.Position or (cam and cam.CFrame.Position)
 	if not origin then
 		return
 	end
@@ -888,24 +908,21 @@ local function refreshKeyTags()
 	nearestKey = best and { part = best, distance = bestDist } or nil
 end
 
---------------------------------------------------------------------
--- HUD: distance + direction to the closest key
---------------------------------------------------------------------
-
+-- HUD: distance + direction to the closest match
 local keyHud = Instance.new("TextLabel")
 keyHud.Name = "KeyHud"
-keyHud.Size = UDim2.fromOffset(320, 34)
-keyHud.Position = UDim2.new(0.5, -160, 0, 12)
-keyHud.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+keyHud.Size = UDim2.fromOffset(280, 28)
+keyHud.Position = UDim2.new(0.5, -140, 0, 10)
+keyHud.BackgroundColor3 = Color3.new(0, 0, 0)
 keyHud.BackgroundTransparency = 0.45
 keyHud.Font = Enum.Font.GothamBold
-keyHud.TextSize = 17
-keyHud.TextColor3 = KEY_COLOR
+keyHud.TextSize = 15
+keyHud.TextColor3 = THEME.key
 keyHud.TextStrokeTransparency = 0.4
 keyHud.Text = ""
 keyHud.Visible = false
 keyHud.Parent = gui
-corner(keyHud, 8)
+corner(keyHud, 6)
 
 local function updateKeyHud()
 	if not state.KeyESP then
@@ -913,7 +930,7 @@ local function updateKeyHud()
 		return
 	end
 	if not nearestKey then
-		-- Nothing matched: tell the user so they can try another keyword.
+		-- Nothing matched: say so, so the keyword can be corrected.
 		keyHud.Text = string.format('KEY: no object named "%s" found', keyQuery)
 		keyHud.Visible = true
 		return
@@ -950,10 +967,9 @@ local function updateKeyHud()
 	end
 
 	local up = ""
-	local dy = to.Y
-	if dy > 6 then
+	if to.Y > 6 then
 		up = "  (above)"
-	elseif dy < -6 then
+	elseif to.Y < -6 then
 		up = "  (below)"
 	end
 
@@ -961,42 +977,11 @@ local function updateKeyHud()
 	keyHud.Visible = true
 end
 
---------------------------------------------------------------------
--- KEY ESP LOOP (slow scan + fast tag/HUD refresh)
---------------------------------------------------------------------
-
-do
-	local scanClock, tagClock = 0, 0
-	RunService.Heartbeat:Connect(function(dt)
-		if not state.KeyESP then
-			return
-		end
-
-		scanClock = scanClock + dt
-		if scanClock >= 1 then
-			scanClock = 0
-			scanForKeys()
-		end
-
-		tagClock = tagClock + dt
-		if tagClock >= 0.1 then
-			tagClock = 0
-			refreshKeyTags()
-			updateKeyHud()
-		end
-	end)
-end
-
---------------------------------------------------------------------
--- KEY ESP UI
---------------------------------------------------------------------
-
-local keyBtn = makeToggle(6, "KeyESPToggle", "Key ESP")
+local keyBtn = toggleButton(keyPage, 1, "Key ESP")
 
 local function setKeyESP(on)
 	state.KeyESP = on
-	keyBtn.Text = on and "Key ESP: ON" or "Key ESP: OFF"
-	keyBtn.BackgroundColor3 = on and THEME.on or THEME.off
+	paintToggle(keyBtn, "Key ESP", on)
 	if on then
 		scanForKeys()
 		refreshKeyTags()
@@ -1011,152 +996,182 @@ keyBtn.Activated:Connect(function()
 	setKeyESP(not state.KeyESP)
 end)
 
--- Keyword box: change what Key ESP looks for (chest, door, gem, ...)
-local queryRow = Instance.new("Frame")
-queryRow.Name = "KeyQueryRow"
-queryRow.LayoutOrder = 7
-queryRow.Size = UDim2.new(1, 0, 0, 52)
-queryRow.BackgroundColor3 = THEME.panel
-queryRow.BorderSizePixel = 0
-queryRow.Parent = panel
-corner(queryRow, 10)
-
-local queryLabel = Instance.new("TextLabel")
-queryLabel.Size = UDim2.new(1, -16, 0, 16)
-queryLabel.Position = UDim2.fromOffset(10, 4)
-queryLabel.BackgroundTransparency = 1
-queryLabel.Text = "Search name contains"
-queryLabel.TextColor3 = THEME.muted
-queryLabel.TextSize = 12
-queryLabel.Font = Enum.Font.Gotham
-queryLabel.TextXAlignment = Enum.TextXAlignment.Left
-queryLabel.Parent = queryRow
-
-local queryBox = Instance.new("TextBox")
-queryBox.Size = UDim2.new(1, -20, 0, 26)
-queryBox.Position = UDim2.fromOffset(10, 21)
-queryBox.BackgroundColor3 = THEME.bg
-queryBox.Text = keyQuery
-queryBox.PlaceholderText = "redkey"
-queryBox.TextColor3 = THEME.text
-queryBox.TextSize = 14
-queryBox.Font = Enum.Font.GothamMedium
-queryBox.ClearTextOnFocus = false
-queryBox.Parent = queryRow
-corner(queryBox, 8)
-
-queryBox.FocusLost:Connect(function()
-	local text = string.lower((queryBox.Text or ""):match("^%s*(.-)%s*$"))
+-- What to look for: any object whose name contains this text.
+local queryBox = textRow(keyPage, 2, "Name has", keyQuery, DEFAULTS.KeyQuery, function(text)
+	text = string.match(string.lower(text or ""), "^%s*(.-)%s*$")
 	if text == "" then
-		text = "redkey"
+		text = DEFAULTS.KeyQuery
 	end
 	keyQuery = text
-	queryBox.Text = text
 	clearKeyEsp()
 	if state.KeyESP then
 		scanForKeys()
 		refreshKeyTags()
 	end
+	return text
 end)
 
---------------------------------------------------------------------
--- PANEL / RESET / HOTKEY WIRING FOR KEY ESP
---------------------------------------------------------------------
-
-panel.Size = UDim2.fromOffset(288, 560)
-
-hint.LayoutOrder = 8
-hint.Text = "Keys:  RightShift panel  |  N noclip\nB fullbright  |  V ESP  |  K key ESP"
-
-resetBtn.Activated:Connect(function()
-	setKeyESP(false)
-end)
-
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed or UserInputService:GetFocusedTextBox() then
-		return
-	end
-	if input.KeyCode == Enum.KeyCode.K then
-		setKeyESP(not state.KeyESP)
-	end
-end)
+-- How often the workspace sweep runs, in seconds.
+-- Lower = reacts faster, higher = cheaper on big maps.
+numberRow(keyPage, 3, "Scan (sec)", "ScanInterval", 0.1, 30, 0.5, 1, nil)
 
 --------------------------------------------------------------------
--- FIELD OF VIEW
---   Low value  = narrow  = zoomed in (sniper-like)
---   High value = wide    = fish-eye, more of the room on screen
+-- KEY ESP LOOP (user-set scan rate + fixed 0.1s tag/HUD refresh)
 --------------------------------------------------------------------
 
-DEFAULTS.FOV = 70
-
-local startCam = workspace.CurrentCamera
-state.FOV = startCam and startCam.FieldOfView or DEFAULTS.FOV
-
-local fovRow = createRow(3, "Field of View  (low = zoom in)", "FOV", 1, 120, 5, 0)
-fovRow.Name = "FOVRow"
-
--- The camera is only forced once the value has actually been changed, so a
--- game that does its own FOV effects (sprint, scope) keeps working until then.
 do
-	local lastFOV = state.FOV
-	local fovOverride = false
-
-	RunService.RenderStepped:Connect(function()
-		local cam = workspace.CurrentCamera
-		if not cam then
+	local scanClock, tagClock = 0, 0
+	RunService.Heartbeat:Connect(function(dt)
+		if not state.KeyESP then
 			return
 		end
-		if state.FOV ~= lastFOV then
-			lastFOV = state.FOV
-			fovOverride = true
-		end
-		if fovOverride and math.abs(cam.FieldOfView - state.FOV) > 0.01 then
-			cam.FieldOfView = state.FOV
-		end
-	end)
 
-	local function setFOV(value)
-		state.FOV = math.clamp(value, 1, 120)
-		if rows.FOV then
-			rows.FOV()
+		scanClock = scanClock + dt
+		if scanClock >= state.ScanInterval then
+			scanClock = 0
+			scanForKeys()
 		end
-	end
 
-	-- [ = narrower / zoom in, ] = wider
-	UserInputService.InputBegan:Connect(function(input, processed)
-		if processed or UserInputService:GetFocusedTextBox() then
-			return
-		end
-		if input.KeyCode == Enum.KeyCode.LeftBracket then
-			setFOV(state.FOV - 5)
-		elseif input.KeyCode == Enum.KeyCode.RightBracket then
-			setFOV(state.FOV + 5)
-		end
-	end)
-
-	resetBtn.Activated:Connect(function()
-		fovOverride = false
-		setFOV(DEFAULTS.FOV)
-		lastFOV = state.FOV
-		local cam = workspace.CurrentCamera
-		if cam then
-			cam.FieldOfView = DEFAULTS.FOV
+		tagClock = tagClock + dt
+		if tagClock >= 0.1 then
+			tagClock = 0
+			refreshKeyTags()
+			updateKeyHud()
 		end
 	end)
 end
 
 --------------------------------------------------------------------
--- RE-ORDER THE PANEL SO FOV SITS WITH THE OTHER SLIDERS
+-- FOOTER: hotkey hint + reset
 --------------------------------------------------------------------
 
-noclipBtn.LayoutOrder = 4
-fullbrightBtn.LayoutOrder = 5
-espBtn.LayoutOrder = 6
-keyBtn.LayoutOrder = 7
-queryRow.LayoutOrder = 8
-hint.LayoutOrder = 9
-resetBtn.LayoutOrder = 10
+local hint = Instance.new("TextLabel")
+hint.Name = "Hotkeys"
+hint.LayoutOrder = 3
+hint.Size = UDim2.new(1, 0, 0, SIZE.hintH)
+hint.BackgroundTransparency = 1
+hint.Text = "RShift panel | N noclip | B bright\nV esp | K key | [ ] fov"
+hint.TextColor3 = THEME.muted
+hint.TextSize = FONTSIZE.hint
+hint.Font = Enum.Font.Gotham
+hint.TextXAlignment = Enum.TextXAlignment.Left
+hint.Parent = panel
 
-panel.Size = UDim2.fromOffset(288, 624)
-hint.Size = UDim2.new(1, 0, 0, 44)
-hint.Text = "Keys:  RightShift panel  |  N noclip  |  K key ESP\nB fullbright  |  V ESP\n[  narrow FOV   ]  wide FOV"
+local resetBtn = Instance.new("TextButton")
+resetBtn.Name = "Reset"
+resetBtn.LayoutOrder = 4
+resetBtn.Size = UDim2.new(1, 0, 0, SIZE.resetH)
+resetBtn.BackgroundColor3 = THEME.panel
+resetBtn.Text = "Reset to default"
+resetBtn.TextColor3 = THEME.muted
+resetBtn.TextSize = FONTSIZE.reset
+resetBtn.Font = Enum.Font.Gotham
+resetBtn.Parent = panel
+corner(resetBtn, 6)
+
+resetBtn.Activated:Connect(function()
+	state.WalkSpeed = DEFAULTS.WalkSpeed
+	state.JumpPower = DEFAULTS.JumpPower
+	state.JumpHeight = DEFAULTS.JumpHeight
+	state.ScanInterval = DEFAULTS.ScanInterval
+
+	setNoclip(false)
+	setFullbright(false)
+	setESP(false)
+	setKeyESP(false)
+
+	fovOverride = false
+	state.FOV = DEFAULTS.FOV
+	local cam = workspace.CurrentCamera
+	if cam then
+		cam.FieldOfView = DEFAULTS.FOV
+	end
+
+	keyQuery = DEFAULTS.KeyQuery
+	queryBox.Text = DEFAULTS.KeyQuery
+
+	for _, refresh in pairs(rows) do
+		refresh()
+	end
+	applyStats()
+end)
+
+--------------------------------------------------------------------
+-- HOTKEYS
+--------------------------------------------------------------------
+
+UserInputService.InputBegan:Connect(function(input, processed)
+	if processed or UserInputService:GetFocusedTextBox() then
+		return
+	end
+
+	local code = input.KeyCode
+	if code == Enum.KeyCode.RightShift then
+		panel.Visible = not panel.Visible
+	elseif code == Enum.KeyCode.N then
+		setNoclip(not state.Noclip)
+	elseif code == Enum.KeyCode.B then
+		setFullbright(not state.Fullbright)
+	elseif code == Enum.KeyCode.V then
+		setESP(not state.ESP)
+	elseif code == Enum.KeyCode.K then
+		setKeyESP(not state.KeyESP)
+	elseif code == Enum.KeyCode.LeftBracket then
+		setFOV(state.FOV - 5)
+	elseif code == Enum.KeyCode.RightBracket then
+		setFOV(state.FOV + 5)
+	end
+end)
+
+--------------------------------------------------------------------
+-- SHOW / HIDE + DRAGGING (mouse and touch)
+--------------------------------------------------------------------
+
+toggleBtn.Activated:Connect(function()
+	panel.Visible = not panel.Visible
+end)
+
+do
+	local dragging, dragStart, startPos = false, nil, nil
+
+	local function beginDrag(input)
+		dragging = true
+		dragStart = input.Position
+		startPos = panel.Position
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+		end)
+	end
+
+	title.InputBegan:Connect(function(input)
+		if
+			input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			beginDrag(input)
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if not dragging then
+			return
+		end
+		if
+			input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch
+		then
+			local delta = input.Position - dragStart
+			panel.Position = UDim2.new(
+				startPos.X.Scale,
+				startPos.X.Offset + delta.X,
+				startPos.Y.Scale,
+				startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+end
+
+selectTab("MOVE")
+applyStats()
