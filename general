@@ -1080,3 +1080,83 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		setKeyESP(not state.KeyESP)
 	end
 end)
+
+--------------------------------------------------------------------
+-- FIELD OF VIEW
+--   Low value  = narrow  = zoomed in (sniper-like)
+--   High value = wide    = fish-eye, more of the room on screen
+--------------------------------------------------------------------
+
+DEFAULTS.FOV = 70
+
+local startCam = workspace.CurrentCamera
+state.FOV = startCam and startCam.FieldOfView or DEFAULTS.FOV
+
+local fovRow = createRow(3, "Field of View  (low = zoom in)", "FOV", 1, 120, 5, 0)
+fovRow.Name = "FOVRow"
+
+-- The camera is only forced once the value has actually been changed, so a
+-- game that does its own FOV effects (sprint, scope) keeps working until then.
+do
+	local lastFOV = state.FOV
+	local fovOverride = false
+
+	RunService.RenderStepped:Connect(function()
+		local cam = workspace.CurrentCamera
+		if not cam then
+			return
+		end
+		if state.FOV ~= lastFOV then
+			lastFOV = state.FOV
+			fovOverride = true
+		end
+		if fovOverride and math.abs(cam.FieldOfView - state.FOV) > 0.01 then
+			cam.FieldOfView = state.FOV
+		end
+	end)
+
+	local function setFOV(value)
+		state.FOV = math.clamp(value, 1, 120)
+		if rows.FOV then
+			rows.FOV()
+		end
+	end
+
+	-- [ = narrower / zoom in, ] = wider
+	UserInputService.InputBegan:Connect(function(input, processed)
+		if processed or UserInputService:GetFocusedTextBox() then
+			return
+		end
+		if input.KeyCode == Enum.KeyCode.LeftBracket then
+			setFOV(state.FOV - 5)
+		elseif input.KeyCode == Enum.KeyCode.RightBracket then
+			setFOV(state.FOV + 5)
+		end
+	end)
+
+	resetBtn.Activated:Connect(function()
+		fovOverride = false
+		setFOV(DEFAULTS.FOV)
+		lastFOV = state.FOV
+		local cam = workspace.CurrentCamera
+		if cam then
+			cam.FieldOfView = DEFAULTS.FOV
+		end
+	end)
+end
+
+--------------------------------------------------------------------
+-- RE-ORDER THE PANEL SO FOV SITS WITH THE OTHER SLIDERS
+--------------------------------------------------------------------
+
+noclipBtn.LayoutOrder = 4
+fullbrightBtn.LayoutOrder = 5
+espBtn.LayoutOrder = 6
+keyBtn.LayoutOrder = 7
+queryRow.LayoutOrder = 8
+hint.LayoutOrder = 9
+resetBtn.LayoutOrder = 10
+
+panel.Size = UDim2.fromOffset(288, 624)
+hint.Size = UDim2.new(1, 0, 0, 44)
+hint.Text = "Keys:  RightShift panel  |  N noclip  |  K key ESP\nB fullbright  |  V ESP\n[  narrow FOV   ]  wide FOV"
