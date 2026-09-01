@@ -3,8 +3,8 @@
 	---------------------------------------
 	A LocalScript with a small draggable GUI split into three tabs:
 
-		MOVE    WalkSpeed, Jump, Field of View, Noclip
-		VIEW    Fullbright, ESP on other players
+		MOVE    WalkSpeed, Jump, Fly + Fly Speed, Noclip
+		VIEW    Field of View, Fullbright, ESP on other players
 		KEY     Object ESP (find "redkey" and friends) + scan rate
 
 	WHERE TO PUT IT:
@@ -13,8 +13,9 @@
 
 	HOTKEYS:
 		RightShift  show / hide panel      N  noclip
-		B  fullbright                      V  player ESP
-		K  key ESP                         [ ]  narrow / wide FOV
+		F  fly (Space up, LeftCtrl down)   B  fullbright
+		V  player ESP                      K  key ESP
+		[ ]  narrow / wide FOV
 
 	Works on PC and mobile. Settings survive respawn.
 --]]
@@ -35,6 +36,7 @@ local DEFAULTS = {
 	JumpPower = 50,
 	JumpHeight = 7.2,
 	FOV = 70,
+	FlySpeed = 60,
 	KeyQuery = "redkey",
 	ScanInterval = 1,
 }
@@ -46,6 +48,8 @@ local state = {
 	JumpPower = DEFAULTS.JumpPower,
 	JumpHeight = DEFAULTS.JumpHeight,
 	FOV = startCam and startCam.FieldOfView or DEFAULTS.FOV,
+	FlySpeed = DEFAULTS.FlySpeed,
+	Fly = false,
 	Noclip = false,
 	Fullbright = false,
 	ESP = false,
@@ -153,12 +157,12 @@ local THEME = {
 
 local SIZE = {
 	panelW = 244,
-	panelH = 260,
+	panelH = 286,
 	pad = 8,
 	gap = 6,
 	titleH = 18,
 	tabH = 22,
-	pageH = 132,
+	pageH = 158,
 	rowH = 26,
 	hintH = 24,
 	resetH = 24,
@@ -495,25 +499,142 @@ else
 	numberRow(movePage, 2, "Jump Height", "JumpHeight", 0, 100, 1, 1, applyStats)
 end
 
--- Field of view: low = narrow / zoomed in, high = wide angle.
-local fovOverride = false -- flips true the moment the user touches FOV
+--------------------------------------------------------------------
+-- MOVE TAB: FLY
+--   Horizontal steering comes from Humanoid.MoveDirection, so WASD and
+--   the mobile thumbstick both work and it is already camera-relative.
+--   Vertical is Space / LeftControl, or the on-screen pad on touch.
+--------------------------------------------------------------------
 
-local setFOV = numberRow(movePage, 3, "Field of View", "FOV", 1, 120, 5, 0, function()
-	fovOverride = true
+local flyBtn = toggleButton(movePage, 3, "Fly")
+numberRow(movePage, 4, "Fly Speed", "FlySpeed", 5, 500, 10, 0, nil)
+
+local flyVelocity = nil -- BodyVelocity living on the HumanoidRootPart
+local flyUp, flyDown = false, false
+
+-- Small up/down pad, only shown while flying on a touch device.
+local flyPad = Instance.new("Frame")
+flyPad.Name = "FlyPad"
+flyPad.Size = UDim2.fromOffset(54, 116)
+flyPad.Position = UDim2.new(1, -70, 1, -200)
+flyPad.BackgroundTransparency = 1
+flyPad.Visible = false
+flyPad.Parent = gui
+
+local function padButton(text, y, setter)
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.fromOffset(54, 54)
+	btn.Position = UDim2.fromOffset(0, y)
+	btn.BackgroundColor3 = THEME.panel
+	btn.BackgroundTransparency = 0.2
+	btn.Text = text
+	btn.TextColor3 = THEME.text
+	btn.TextSize = 20
+	btn.Font = Enum.Font.GothamBold
+	btn.AutoButtonColor = true
+	btn.Parent = flyPad
+	corner(btn, 27)
+
+	local function held(input, value)
+		if
+			input.UserInputType == Enum.UserInputType.Touch
+			or input.UserInputType == Enum.UserInputType.MouseButton1
+		then
+			setter(value)
+		end
+	end
+
+	btn.InputBegan:Connect(function(input)
+		held(input, true)
+	end)
+	btn.InputEnded:Connect(function(input)
+		held(input, false)
+	end)
+end
+
+padButton("^", 0, function(v)
+	flyUp = v
+end)
+padButton("v", 62, function(v)
+	flyDown = v
 end)
 
--- Hold the chosen FOV even if the game keeps writing its own.
-RunService.RenderStepped:Connect(function()
-	if not fovOverride then
+local function stopFly()
+	if flyVelocity then
+		flyVelocity:Destroy()
+		flyVelocity = nil
+	end
+	flyUp, flyDown = false, false
+end
+
+local function startFly()
+	stopFly()
+	local char = player.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not root then
 		return
 	end
-	local cam = workspace.CurrentCamera
-	if cam and math.abs(cam.FieldOfView - state.FOV) > 0.01 then
-		cam.FieldOfView = state.FOV
+	local bv = Instance.new("BodyVelocity")
+	bv.Name = "FlyVelocity"
+	bv.MaxForce = Vector3.new(1, 1, 1) * 1e6
+	bv.P = 5000
+	bv.Velocity = Vector3.zero
+	bv.Parent = root
+	flyVelocity = bv
+end
+
+RunService.RenderStepped:Connect(function()
+	if not state.Fly then
+		return
 	end
+
+	local char = player.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local hum = getHumanoid()
+	if not root or not hum then
+		return
+	end
+
+	-- Rebuild after a respawn, or if the game stripped the mover.
+	if not flyVelocity or flyVelocity.Parent ~= root then
+		startFly()
+		if not flyVelocity then
+			return
+		end
+	end
+
+	local move = hum.MoveDirection -- world space, already camera-relative
+	local vertical = 0
+	if flyUp or UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+		vertical = vertical + 1
+	end
+	if flyDown or UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+		vertical = vertical - 1
+	end
+
+	local dir = Vector3.new(move.X, vertical, move.Z)
+	if dir.Magnitude > 0 then
+		dir = dir.Unit
+	end
+	flyVelocity.Velocity = dir * state.FlySpeed
 end)
 
-local noclipBtn = toggleButton(movePage, 4, "Noclip")
+local function setFly(on)
+	state.Fly = on
+	paintToggle(flyBtn, "Fly", on)
+	flyPad.Visible = on and UserInputService.TouchEnabled
+	if on then
+		startFly()
+	else
+		stopFly()
+	end
+end
+
+flyBtn.Activated:Connect(function()
+	setFly(not state.Fly)
+end)
+
+local noclipBtn = toggleButton(movePage, 5, "Noclip")
 
 local function setNoclip(on)
 	state.Noclip = on
@@ -527,6 +648,27 @@ end
 
 noclipBtn.Activated:Connect(function()
 	setNoclip(not state.Noclip)
+end)
+
+--------------------------------------------------------------------
+-- VIEW TAB: FIELD OF VIEW  (low = narrow / zoomed in, high = wide)
+--------------------------------------------------------------------
+
+local fovOverride = false -- flips true the moment the user touches FOV
+
+local setFOV = numberRow(viewPage, 1, "Field of View", "FOV", 1, 120, 5, 0, function()
+	fovOverride = true
+end)
+
+-- Hold the chosen FOV even if the game keeps writing its own.
+RunService.RenderStepped:Connect(function()
+	if not fovOverride then
+		return
+	end
+	local cam = workspace.CurrentCamera
+	if cam and math.abs(cam.FieldOfView - state.FOV) > 0.01 then
+		cam.FieldOfView = state.FOV
+	end
 end)
 
 --------------------------------------------------------------------
@@ -597,7 +739,7 @@ local function restoreLighting()
 	table.clear(atmosphereBackup)
 end
 
-local fullbrightBtn = toggleButton(viewPage, 1, "Fullbright")
+local fullbrightBtn = toggleButton(viewPage, 2, "Fullbright")
 
 local function setFullbright(on)
 	state.Fullbright = on
@@ -719,7 +861,7 @@ end
 
 Players.PlayerRemoving:Connect(removeEsp)
 
-local espBtn = toggleButton(viewPage, 2, "ESP Players")
+local espBtn = toggleButton(viewPage, 3, "ESP Players")
 
 local function setESP(on)
 	state.ESP = on
@@ -1050,7 +1192,7 @@ hint.Name = "Hotkeys"
 hint.LayoutOrder = 3
 hint.Size = UDim2.new(1, 0, 0, SIZE.hintH)
 hint.BackgroundTransparency = 1
-hint.Text = "RShift panel | N noclip | B bright\nV esp | K key | [ ] fov"
+hint.Text = "RShift panel | F fly | N noclip\nB bright | V esp | K key | [ ] fov"
 hint.TextColor3 = THEME.muted
 hint.TextSize = FONTSIZE.hint
 hint.Font = Enum.Font.Gotham
@@ -1074,7 +1216,9 @@ resetBtn.Activated:Connect(function()
 	state.JumpPower = DEFAULTS.JumpPower
 	state.JumpHeight = DEFAULTS.JumpHeight
 	state.ScanInterval = DEFAULTS.ScanInterval
+	state.FlySpeed = DEFAULTS.FlySpeed
 
+	setFly(false)
 	setNoclip(false)
 	setFullbright(false)
 	setESP(false)
@@ -1108,6 +1252,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 	local code = input.KeyCode
 	if code == Enum.KeyCode.RightShift then
 		panel.Visible = not panel.Visible
+	elseif code == Enum.KeyCode.F then
+		setFly(not state.Fly)
 	elseif code == Enum.KeyCode.N then
 		setNoclip(not state.Noclip)
 	elseif code == Enum.KeyCode.B then
