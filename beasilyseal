@@ -1,0 +1,56 @@
+-- [[ Rscripts Risk Notice ]]
+-- This script is not verified by rscripts.net. Deal with caution.
+--
+-- Stay safe:
+--   • Never log in on unofficial Roblox sites or lookalike domains.
+--   • Real Roblox links use roblox.com (check the .com ending).
+--   • Treat fake Roblox login / "claim reward" pages as phishing.
+-- [[ End Rscripts Risk Notice ]]
+
+(function() {
+    'use strict';
+
+    // 1. Повний перебір усіх можливих імен для монет (записуємо всюди по 1 000 000)
+    const coinKeys = [
+        'coins', 'seal_coins', 'money', 'cash', 'gold', 'points', 'score', 
+        'currency', 'balance', 'total_coins', 'player_coins', 'silly_coins'
+    ];
+    
+    coinKeys.forEach(key => {
+        localStorage.setItem(key, '1000000');
+        localStorage.setItem(`silly_seal_${key}`, '1000000');
+    });
+
+    // 2. Розблокування ВСІХ тюленів (охоплюємо масиви, булеві прапорці та рівні)
+    const sealKeys = [
+        'unlocked_seals', 'seals', 'owned_seals', 'unlocked', 'skins', 'characters'
+    ];
+    
+    // Створюємо масив від 0 до 100 (якщо тюлені закодовані цифрами-ID)
+    const heavyArray = Array.from({length: 100}, (_, i) => i.toString());
+    // Додаємо варіант з текстовими ID
+    const textArray = ["all", "seal_all", "max", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+    const combinedArray = heavyArray.concat(textArray);
+
+    sealKeys.forEach(key => {
+        // Записуємо як чистий текст, так і JSON-масив
+        localStorage.setItem(key, JSON.stringify(combinedArray));
+        localStorage.setItem(`silly_seal_${key}`, JSON.stringify(combinedArray));
+        localStorage.setItem(key, 'true'); 
+        localStorage.setItem(`all_${key}`, 'true');
+        localStorage.setItem(`all_${key}_unlocked`, 'true');
+    });
+
+    // Окремі специфічні прапорці
+    localStorage.setItem('all_seals_unlocked', 'true');
+    localStorage.setItem('allSealsUnlocked', 'true');
+    localStorage.setItem('max_level', '999');
+    localStorage.setItem('current_level', '999');
+
+    console.log('🔥 Скрипт виконав повний інжект! Перезавантажую сторінку...');
+    
+    // Примусове перезавантаження сторінки для застосування хаку
+    setTimeout(() => {
+        location.reload();
+    }, 500);
+})();
