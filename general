@@ -1,12 +1,12 @@
 --[[
 	Player Tweaks Panel  (compact / tabbed)
 	---------------------------------------
-	A LocalScript with a small draggable GUI split into four tabs:
+	A LocalScript with a small draggable GUI split into five tabs:
 
 		MOVE    WalkSpeed, Jump, Fly + Fly Speed, Noclip
 		VIEW    Field of View, Fullbright, ESP on other players
-		KEY     Object ESP (comma separated terms), scan rate,
-		        Auto Move + move delay, Go to nearest
+		KEY     Object ESP: search terms, scan rate, search range
+		GO      Auto Move + move delay, Go to nearest
 		OPT     Hotkey master switch, per-key on/off, Unload
 
 	WHERE TO PUT IT:
@@ -42,6 +42,7 @@ local DEFAULTS = {
 	KeyQuery = "redkey",
 	ScanInterval = 1,
 	MoveDelay = 2,
+	SearchRange = 0, -- studs; 0 means no limit
 }
 
 local startCam = workspace.CurrentCamera
@@ -61,6 +62,7 @@ local state = {
 	AutoMove = false,
 	ScanInterval = DEFAULTS.ScanInterval, -- seconds between workspace sweeps
 	MoveDelay = DEFAULTS.MoveDelay, -- seconds between auto-move hops
+	SearchRange = DEFAULTS.SearchRange, -- studs; 0 means no limit
 }
 
 -- Key ESP search terms. A name matching ANY of these counts as a hit, so the
@@ -178,12 +180,12 @@ local THEME = {
 
 local SIZE = {
 	panelW = 244,
-	panelH = 314,
+	panelH = 296,
 	pad = 8,
 	gap = 6,
 	titleH = 18,
 	tabH = 22,
-	pageH = 186,
+	pageH = 168,
 	rowH = 26,
 	hintH = 24,
 	resetH = 24,
@@ -317,7 +319,7 @@ local function createTab(order, name)
 	local button = Instance.new("TextButton")
 	button.Name = name .. "Tab"
 	button.LayoutOrder = order
-	button.Size = UDim2.new(1 / 4, -3, 1, 0)
+	button.Size = UDim2.new(1 / 5, -3, 1, 0)
 	button.BackgroundColor3 = THEME.panel
 	button.Text = name
 	button.TextColor3 = THEME.muted
@@ -350,7 +352,8 @@ end
 local movePage = createTab(1, "MOVE")
 local viewPage = createTab(2, "VIEW")
 local keyPage = createTab(3, "KEY")
-local optPage = createTab(4, "OPT")
+local goPage = createTab(4, "GO")
+local optPage = createTab(5, "OPT")
 
 --------------------------------------------------------------------
 -- CONTROL BUILDERS
@@ -1046,13 +1049,32 @@ local function matchesQuery(name)
 	return false
 end
 
+-- Where distances are measured from: the character, or the camera before
+-- the character exists.
+local function measureOrigin()
+	local char = player.Character
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if root then
+		return root.Position
+	end
+	local cam = workspace.CurrentCamera
+	return cam and cam.CFrame.Position or nil
+end
+
 -- Full workspace sweep. The expensive part, so it runs on its own timer.
 local function scanForKeys()
 	local found = {}
+	local origin = measureOrigin()
+	local range = state.SearchRange -- 0 = search the whole map
+
 	for _, inst in ipairs(workspace:GetDescendants()) do
 		if matchesQuery(inst.Name) and not isMine(inst) then
 			local part = anchorPart(inst)
-			if part then
+			local inRange = part ~= nil
+			if part and range > 0 and origin then
+				inRange = (part.Position - origin).Magnitude <= range
+			end
+			if part and inRange then
 				found[inst] = part
 				local o = keyObjects[inst]
 				if not o then
@@ -1120,8 +1142,12 @@ local function updateKeyHud()
 		return
 	end
 	if not nearestKey then
-		-- Nothing matched: list what was searched for so it can be corrected.
-		keyHud.Text = "KEY: nothing named  " .. table.concat(keyQueries, " / ")
+		-- Say why nothing showed up: wrong name, or nothing close enough.
+		if state.SearchRange > 0 then
+			keyHud.Text = string.format("KEY: nothing within %dm", state.SearchRange)
+		else
+			keyHud.Text = "KEY: nothing named  " .. table.concat(keyQueries, " / ")
+		end
 		keyHud.Visible = true
 		return
 	end
@@ -1201,8 +1227,18 @@ end)
 -- Lower = reacts faster, higher = cheaper on big maps.
 numberRow(keyPage, 3, "Scan (sec)", "ScanInterval", 0.1, 30, 0.5, 1, nil)
 
+-- How far to look, in studs. 0 searches the whole map. Anything outside the
+-- range is dropped from the scan, so it stops showing and Auto Move skips it.
+numberRow(keyPage, 4, "Range 0=all", "SearchRange", 0, 20000, 50, 0, function()
+	if state.KeyESP then
+		clearKeyEsp()
+		scanForKeys()
+		refreshKeyTags()
+	end
+end)
+
 --------------------------------------------------------------------
--- KEY TAB: TRAVEL TO WHAT WAS FOUND
+-- GO TAB: TRAVEL TO WHAT WAS FOUND
 --   Auto Move walks the list nearest-first, one hop per Move Delay.
 --   Objects already visited are skipped until nothing is left, then the
 --   list is reused, so a key that respawns is picked up again.
@@ -1242,20 +1278,20 @@ local function nextTarget()
 	return best
 end
 
-local autoMoveBtn = toggleButton(keyPage, 4, "Auto Move")
+local autoMoveBtn = toggleButton(goPage, 1, "Auto Move")
 
-numberRow(keyPage, 5, "Move (sec)", "MoveDelay", 0.1, 60, 0.5, 1, nil)
+numberRow(goPage, 2, "Move (sec)", "MoveDelay", 0.1, 60, 0.5, 1, nil)
 
 local goBtn = Instance.new("TextButton")
 goBtn.Name = "GoToNearest"
-goBtn.LayoutOrder = 6
+goBtn.LayoutOrder = 3
 goBtn.Size = UDim2.new(1, 0, 0, SIZE.rowH)
 goBtn.BackgroundColor3 = THEME.panel
 goBtn.Text = "Go to nearest"
 goBtn.TextColor3 = THEME.key
 goBtn.TextSize = FONTSIZE.toggle
 goBtn.Font = Enum.Font.GothamBold
-goBtn.Parent = keyPage
+goBtn.Parent = goPage
 corner(goBtn, 6)
 
 local function flashGo(text)
@@ -1378,6 +1414,7 @@ resetBtn.Activated:Connect(function()
 	state.JumpHeight = DEFAULTS.JumpHeight
 	state.ScanInterval = DEFAULTS.ScanInterval
 	state.MoveDelay = DEFAULTS.MoveDelay
+	state.SearchRange = DEFAULTS.SearchRange
 	state.FlySpeed = DEFAULTS.FlySpeed
 
 	setAutoMove(false)
