@@ -6,7 +6,7 @@
 		MOVE    WalkSpeed, Jump, Fly + Fly Speed, Noclip
 		VIEW    Field of View, Fullbright, ESP on other players
 		KEY     Object ESP (comma separated search terms) + scan rate
-		OPT     Hotkey master switch + per-key on/off
+		OPT     Hotkey master switch, per-key on/off, Unload
 
 	WHERE TO PUT IT:
 		StarterPlayer > StarterPlayerScripts   (recommended)
@@ -16,7 +16,7 @@
 		RightShift  show / hide panel      N  noclip
 		F  fly (Space up, LeftCtrl down)   B  fullbright
 		V  player ESP                      K  key ESP
-		[ ]  narrow / wide FOV
+		[ ]  narrow / wide FOV             Delete x2  unload script
 
 	Works on PC and mobile. Settings survive respawn.
 --]]
@@ -68,6 +68,17 @@ local hotkeyEnabled = {} -- filled in by the OPT tab; id -> boolean
 local rows = {} -- key -> refresh function, so Reset can repaint every number
 local originalCollide = {} -- BasePart -> original CanCollide
 
+-- Every connection made to a service (rather than to our own GUI) is kept here
+-- so Unload can shut the script down completely. GUI connections do not need
+-- tracking: gui:Destroy() drops them with the instances they belong to.
+local connections = {}
+
+local function bind(signal, fn)
+	local conn = signal:Connect(fn)
+	table.insert(connections, conn)
+	return conn
+end
+
 --------------------------------------------------------------------
 -- CHARACTER HELPERS
 --------------------------------------------------------------------
@@ -116,7 +127,7 @@ local function restoreCollisions()
 end
 
 -- Noclip loop: keeps every character part non-colliding while enabled.
-RunService.Stepped:Connect(function()
+bind(RunService.Stepped, function()
 	if not state.Noclip then
 		return
 	end
@@ -134,7 +145,7 @@ RunService.Stepped:Connect(function()
 	end
 end)
 
-player.CharacterAdded:Connect(function(char)
+bind(player.CharacterAdded, function(char)
 	char:WaitForChild("Humanoid")
 	task.wait(0.25)
 	applyStats()
@@ -163,12 +174,12 @@ local THEME = {
 
 local SIZE = {
 	panelW = 244,
-	panelH = 286,
+	panelH = 296,
 	pad = 8,
 	gap = 6,
 	titleH = 18,
 	tabH = 22,
-	pageH = 158,
+	pageH = 168,
 	rowH = 26,
 	hintH = 24,
 	resetH = 24,
@@ -590,7 +601,7 @@ local function startFly()
 	flyVelocity = bv
 end
 
-RunService.RenderStepped:Connect(function()
+bind(RunService.RenderStepped, function()
 	if not state.Fly then
 		return
 	end
@@ -668,7 +679,7 @@ local setFOV = numberRow(viewPage, 1, "Field of View", "FOV", 1, 120, 5, 0, func
 end)
 
 -- Hold the chosen FOV even if the game keeps writing its own.
-RunService.RenderStepped:Connect(function()
+bind(RunService.RenderStepped, function()
 	if not fovOverride then
 		return
 	end
@@ -866,7 +877,7 @@ local function updateEspFor(plr)
 	)
 end
 
-Players.PlayerRemoving:Connect(removeEsp)
+bind(Players.PlayerRemoving, removeEsp)
 
 local espBtn = toggleButton(viewPage, 3, "ESP Players")
 
@@ -885,7 +896,7 @@ end)
 -- Fullbright refresh + player ESP refresh share one 0.1s tick.
 do
 	local clock = 0
-	RunService.Heartbeat:Connect(function(dt)
+	bind(RunService.Heartbeat, function(dt)
 		clock = clock + dt
 		if clock < 0.1 then
 			return
@@ -1192,7 +1203,7 @@ numberRow(keyPage, 3, "Scan (sec)", "ScanInterval", 0.1, 30, 0.5, 1, nil)
 
 do
 	local scanClock, tagClock = 0, 0
-	RunService.Heartbeat:Connect(function(dt)
+	bind(RunService.Heartbeat, function(dt)
 		if not state.KeyESP then
 			return
 		end
@@ -1283,6 +1294,7 @@ local HOTKEYS = {
 	{ id = "ESP", chip = "V esp", codes = { Enum.KeyCode.V } },
 	{ id = "KeyESP", chip = "K key", codes = { Enum.KeyCode.K } },
 	{ id = "FOV", chip = "[ ] fov", codes = { Enum.KeyCode.LeftBracket, Enum.KeyCode.RightBracket } },
+	{ id = "Unload", chip = "Del unload", codes = { Enum.KeyCode.Delete } },
 }
 
 for _, binding in ipairs(HOTKEYS) do
@@ -1375,6 +1387,90 @@ end)
 setHotkeys(state.Hotkeys)
 
 --------------------------------------------------------------------
+-- UNLOAD: put the game back the way it was and remove the script
+--------------------------------------------------------------------
+
+local unloadBtn = Instance.new("TextButton")
+unloadBtn.Name = "Unload"
+unloadBtn.LayoutOrder = 4
+unloadBtn.Size = UDim2.new(1, 0, 0, SIZE.rowH)
+unloadBtn.BackgroundColor3 = THEME.panel
+unloadBtn.Text = "Unload script"
+unloadBtn.TextColor3 = THEME.enemy
+unloadBtn.TextSize = FONTSIZE.toggle
+unloadBtn.Font = Enum.Font.GothamBold
+unloadBtn.Parent = optPage
+corner(unloadBtn, 6)
+
+local unloadArmed = false
+local unloadToken = 0
+
+-- Two taps required, so a stray click or Delete press cannot wipe the panel.
+local function armUnload()
+	unloadArmed = true
+	unloadToken = unloadToken + 1
+	unloadBtn.Text = "Tap again to unload"
+	unloadBtn.BackgroundColor3 = THEME.enemy
+	unloadBtn.TextColor3 = Color3.new(1, 1, 1)
+
+	local token = unloadToken
+	task.delay(3, function()
+		if unloadArmed and unloadToken == token then
+			unloadArmed = false
+			unloadBtn.Text = "Unload script"
+			unloadBtn.BackgroundColor3 = THEME.panel
+			unloadBtn.TextColor3 = THEME.enemy
+		end
+	end)
+end
+
+local function unloadScript()
+	-- 1. switch every feature off through its own setter, which restores
+	--    lighting, collisions, highlights and the fly mover.
+	setFly(false)
+	setNoclip(false)
+	setFullbright(false)
+	setESP(false)
+	setKeyESP(false)
+
+	-- 2. hand the camera back to the game
+	if fovOverride then
+		fovOverride = false
+		local cam = workspace.CurrentCamera
+		if cam then
+			cam.FieldOfView = DEFAULTS.FOV
+		end
+	end
+
+	-- 3. normal movement stats again
+	state.WalkSpeed = DEFAULTS.WalkSpeed
+	state.JumpPower = DEFAULTS.JumpPower
+	state.JumpHeight = DEFAULTS.JumpHeight
+	applyStats()
+
+	-- 4. stop every service loop, then delete the interface
+	for _, conn in ipairs(connections) do
+		if conn.Connected then
+			conn:Disconnect()
+		end
+	end
+	table.clear(connections)
+
+	gui:Destroy()
+	print("[Player Tweaks] unloaded")
+end
+
+local function pressUnload()
+	if unloadArmed then
+		unloadScript()
+	else
+		armUnload()
+	end
+end
+
+unloadBtn.Activated:Connect(pressUnload)
+
+--------------------------------------------------------------------
 -- HOTKEY DISPATCH
 --------------------------------------------------------------------
 
@@ -1382,7 +1478,7 @@ local function hotkeyActive(id)
 	return state.Hotkeys and hotkeyEnabled[id]
 end
 
-UserInputService.InputBegan:Connect(function(input, processed)
+bind(UserInputService.InputBegan, function(input, processed)
 	if processed or not state.Hotkeys or UserInputService:GetFocusedTextBox() then
 		return
 	end
@@ -1404,6 +1500,8 @@ UserInputService.InputBegan:Connect(function(input, processed)
 		setFOV(state.FOV - 5)
 	elseif code == Enum.KeyCode.RightBracket and hotkeyActive("FOV") then
 		setFOV(state.FOV + 5)
+	elseif code == Enum.KeyCode.Delete and hotkeyActive("Unload") then
+		pressUnload()
 	end
 end)
 
@@ -1438,7 +1536,7 @@ do
 		end
 	end)
 
-	UserInputService.InputChanged:Connect(function(input)
+	bind(UserInputService.InputChanged, function(input)
 		if not dragging then
 			return
 		end
