@@ -26,6 +26,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
+local TweenService = game:GetService("TweenService")
 
 local player = Players.LocalPlayer
 
@@ -1227,9 +1228,89 @@ end)
 -- Lower = reacts faster, higher = cheaper on big maps.
 numberRow(keyPage, 3, "Scan (sec)", "ScanInterval", 0.1, 30, 0.5, 1, nil)
 
+--------------------------------------------------------------------
+-- RANGE PREVIEW
+--   A flat red disc on the ground showing how far the scan reaches.
+--   It appears whenever the range is changed and fades out after 3s.
+--   Roblox caps a part at 2048 studs per axis, which is why the Range
+--   row stops at 1000 (a 2000 stud wide disc); use 0 for the whole map.
+--------------------------------------------------------------------
+
+local RANGE_ALPHA = 0.85 -- resting transparency of the disc
+
+local rangeDisc = Instance.new("Part")
+rangeDisc.Name = "SearchRangePreview"
+rangeDisc.Shape = Enum.PartType.Cylinder
+rangeDisc.Size = Vector3.new(0.2, 2, 2)
+rangeDisc.Color = Color3.fromRGB(255, 55, 55)
+rangeDisc.Material = Enum.Material.Neon
+rangeDisc.Transparency = 1
+rangeDisc.Anchored = true
+rangeDisc.CanCollide = false
+rangeDisc.CanQuery = false
+rangeDisc.CanTouch = false
+rangeDisc.CastShadow = false
+rangeDisc.Parent = workspace
+
+local rangeVisible = false
+local rangeToken = 0 -- so an older hide timer cannot cut a newer preview short
+
+local function placeRangeDisc()
+	local origin = measureOrigin()
+	local radius = state.SearchRange
+	if not origin or radius <= 0 then
+		return false
+	end
+	rangeDisc.Size = Vector3.new(0.2, radius * 2, radius * 2)
+	-- A cylinder part runs along its X axis, so tip it up to lie flat.
+	rangeDisc.CFrame = CFrame.new(origin - Vector3.new(0, 2.6, 0))
+		* CFrame.Angles(0, 0, math.rad(90))
+	return true
+end
+
+local function hideRangeDisc(fade)
+	rangeVisible = false
+	if fade then
+		TweenService:Create(rangeDisc, TweenInfo.new(0.4), { Transparency = 1 }):Play()
+	else
+		rangeDisc.Transparency = 1
+	end
+end
+
+local function showRangePreview()
+	rangeToken = rangeToken + 1
+	local token = rangeToken
+
+	-- 0 means unlimited: there is no circle to draw.
+	if not placeRangeDisc() then
+		hideRangeDisc(false)
+		return
+	end
+
+	rangeVisible = true
+	rangeDisc.Transparency = RANGE_ALPHA
+
+	task.delay(3, function()
+		if token == rangeToken and rangeDisc.Parent then
+			hideRangeDisc(true)
+		end
+	end)
+end
+
+-- Keep the disc centred on the player for as long as it is showing.
+bind(RunService.RenderStepped, function()
+	if not rangeVisible then
+		return
+	end
+	if not placeRangeDisc() then
+		hideRangeDisc(false)
+	end
+end)
+
 -- How far to look, in studs. 0 searches the whole map. Anything outside the
 -- range is dropped from the scan, so it stops showing and Auto Move skips it.
-numberRow(keyPage, 4, "Range 0=all", "SearchRange", 0, 20000, 50, 0, function()
+numberRow(keyPage, 4, "Range 0=all", "SearchRange", 0, 1000, 50, 0, function()
+	showRangePreview()
 	if state.KeyESP then
 		clearKeyEsp()
 		scanForKeys()
@@ -1617,6 +1698,7 @@ local function unloadScript()
 	end
 	table.clear(connections)
 
+	rangeDisc:Destroy()
 	gui:Destroy()
 	print("[Player Tweaks] unloaded")
 end
