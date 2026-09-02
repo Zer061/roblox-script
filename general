@@ -1,11 +1,12 @@
 --[[
 	Player Tweaks Panel  (compact / tabbed)
 	---------------------------------------
-	A LocalScript with a small draggable GUI split into three tabs:
+	A LocalScript with a small draggable GUI split into four tabs:
 
 		MOVE    WalkSpeed, Jump, Fly + Fly Speed, Noclip
 		VIEW    Field of View, Fullbright, ESP on other players
-		KEY     Object ESP (find "redkey" and friends) + scan rate
+		KEY     Object ESP (comma separated search terms) + scan rate
+		OPT     Hotkey master switch + per-key on/off
 
 	WHERE TO PUT IT:
 		StarterPlayer > StarterPlayerScripts   (recommended)
@@ -54,10 +55,15 @@ local state = {
 	Fullbright = false,
 	ESP = false,
 	KeyESP = false,
+	Hotkeys = true,
 	ScanInterval = DEFAULTS.ScanInterval, -- seconds between workspace sweeps
 }
 
-local keyQuery = DEFAULTS.KeyQuery -- lowercase substring used by the key scanner
+-- Key ESP search terms. A name matching ANY of these counts as a hit, so the
+-- box takes a comma separated list: "redkey, bluekey, card".
+local keyQueries = { DEFAULTS.KeyQuery }
+
+local hotkeyEnabled = {} -- filled in by the OPT tab; id -> boolean
 
 local rows = {} -- key -> refresh function, so Reset can repaint every number
 local originalCollide = {} -- BasePart -> original CanCollide
@@ -296,7 +302,7 @@ local function createTab(order, name)
 	local button = Instance.new("TextButton")
 	button.Name = name .. "Tab"
 	button.LayoutOrder = order
-	button.Size = UDim2.new(1 / 3, -3, 1, 0)
+	button.Size = UDim2.new(1 / 4, -3, 1, 0)
 	button.BackgroundColor3 = THEME.panel
 	button.Text = name
 	button.TextColor3 = THEME.muted
@@ -329,6 +335,7 @@ end
 local movePage = createTab(1, "MOVE")
 local viewPage = createTab(2, "VIEW")
 local keyPage = createTab(3, "KEY")
+local optPage = createTab(4, "OPT")
 
 --------------------------------------------------------------------
 -- CONTROL BUILDERS
@@ -998,11 +1005,37 @@ local function createKeyEsp(inst, part)
 	return o
 end
 
+-- "redkey, bluekey , Card" -> { "redkey", "bluekey", "card" }
+local function parseQueries(text)
+	local list, seen = {}, {}
+	for chunk in string.gmatch(string.lower(text or ""), "[^,]+") do
+		local word = string.match(chunk, "^%s*(.-)%s*$")
+		if word ~= "" and not seen[word] then
+			seen[word] = true
+			table.insert(list, word)
+		end
+	end
+	if #list == 0 then
+		list = { DEFAULTS.KeyQuery }
+	end
+	return list
+end
+
+local function matchesQuery(name)
+	local lower = string.lower(name)
+	for _, term in ipairs(keyQueries) do
+		if string.find(lower, term, 1, true) then
+			return true
+		end
+	end
+	return false
+end
+
 -- Full workspace sweep. The expensive part, so it runs on its own timer.
 local function scanForKeys()
 	local found = {}
 	for _, inst in ipairs(workspace:GetDescendants()) do
-		if string.find(string.lower(inst.Name), keyQuery, 1, true) and not isMine(inst) then
+		if matchesQuery(inst.Name) and not isMine(inst) then
 			local part = anchorPart(inst)
 			if part then
 				found[inst] = part
@@ -1072,8 +1105,8 @@ local function updateKeyHud()
 		return
 	end
 	if not nearestKey then
-		-- Nothing matched: say so, so the keyword can be corrected.
-		keyHud.Text = string.format('KEY: no object named "%s" found', keyQuery)
+		-- Nothing matched: list what was searched for so it can be corrected.
+		keyHud.Text = "KEY: nothing named  " .. table.concat(keyQueries, " / ")
 		keyHud.Visible = true
 		return
 	end
@@ -1138,19 +1171,15 @@ keyBtn.Activated:Connect(function()
 	setKeyESP(not state.KeyESP)
 end)
 
--- What to look for: any object whose name contains this text.
-local queryBox = textRow(keyPage, 2, "Name has", keyQuery, DEFAULTS.KeyQuery, function(text)
-	text = string.match(string.lower(text or ""), "^%s*(.-)%s*$")
-	if text == "" then
-		text = DEFAULTS.KeyQuery
-	end
-	keyQuery = text
+-- What to look for. Comma separated: an object matching ANY term is shown.
+local queryBox = textRow(keyPage, 2, "Names", table.concat(keyQueries, ", "), "redkey, bluekey", function(text)
+	keyQueries = parseQueries(text)
 	clearKeyEsp()
 	if state.KeyESP then
 		scanForKeys()
 		refreshKeyTags()
 	end
-	return text
+	return table.concat(keyQueries, ", ")
 end)
 
 -- How often the workspace sweep runs, in seconds.
@@ -1231,7 +1260,7 @@ resetBtn.Activated:Connect(function()
 		cam.FieldOfView = DEFAULTS.FOV
 	end
 
-	keyQuery = DEFAULTS.KeyQuery
+	keyQueries = { DEFAULTS.KeyQuery }
 	queryBox.Text = DEFAULTS.KeyQuery
 
 	for _, refresh in pairs(rows) do
@@ -1241,30 +1270,139 @@ resetBtn.Activated:Connect(function()
 end)
 
 --------------------------------------------------------------------
--- HOTKEYS
+-- OPT TAB: HOTKEYS
+--   A master switch plus one chip per binding, so a key that clashes
+--   with the game (F, V, K...) can be switched off on its own.
 --------------------------------------------------------------------
 
+local HOTKEYS = {
+	{ id = "Panel", chip = "RShift menu", codes = { Enum.KeyCode.RightShift } },
+	{ id = "Fly", chip = "F fly", codes = { Enum.KeyCode.F } },
+	{ id = "Noclip", chip = "N noclip", codes = { Enum.KeyCode.N } },
+	{ id = "Fullbright", chip = "B bright", codes = { Enum.KeyCode.B } },
+	{ id = "ESP", chip = "V esp", codes = { Enum.KeyCode.V } },
+	{ id = "KeyESP", chip = "K key", codes = { Enum.KeyCode.K } },
+	{ id = "FOV", chip = "[ ] fov", codes = { Enum.KeyCode.LeftBracket, Enum.KeyCode.RightBracket } },
+}
+
+for _, binding in ipairs(HOTKEYS) do
+	hotkeyEnabled[binding.id] = true
+end
+
+local hotkeyMasterBtn = toggleButton(optPage, 1, "Hotkeys")
+
+local hotkeyNote = Instance.new("TextLabel")
+hotkeyNote.Name = "HotkeyNote"
+hotkeyNote.LayoutOrder = 2
+hotkeyNote.Size = UDim2.new(1, 0, 0, 14)
+hotkeyNote.BackgroundTransparency = 1
+hotkeyNote.Text = "tap a key to turn it on / off"
+hotkeyNote.TextColor3 = THEME.muted
+hotkeyNote.TextSize = 9
+hotkeyNote.Font = Enum.Font.Gotham
+hotkeyNote.TextXAlignment = Enum.TextXAlignment.Left
+hotkeyNote.Parent = optPage
+
+local chipHolder = Instance.new("Frame")
+chipHolder.Name = "HotkeyChips"
+chipHolder.LayoutOrder = 3
+chipHolder.Size = UDim2.new(1, 0, 0, 84)
+chipHolder.BackgroundTransparency = 1
+chipHolder.Parent = optPage
+
+local chipGrid = Instance.new("UIGridLayout")
+chipGrid.CellSize = UDim2.new(1 / 3, -3, 0, 24)
+chipGrid.CellPadding = UDim2.fromOffset(4, 4)
+chipGrid.SortOrder = Enum.SortOrder.LayoutOrder
+chipGrid.Parent = chipHolder
+
+local chips = {} -- id -> TextButton
+
+local function paintChip(binding)
+	local chip = chips[binding.id]
+	if not chip then
+		return
+	end
+	local live = state.Hotkeys and hotkeyEnabled[binding.id]
+	chip.BackgroundColor3 = live and THEME.on or THEME.off
+	chip.TextColor3 = live and Color3.new(1, 1, 1) or THEME.muted
+end
+
+local function paintAllChips()
+	for _, binding in ipairs(HOTKEYS) do
+		paintChip(binding)
+	end
+end
+
+for order, binding in ipairs(HOTKEYS) do
+	local chip = Instance.new("TextButton")
+	chip.Name = binding.id .. "Chip"
+	chip.LayoutOrder = order
+	chip.BackgroundColor3 = THEME.on
+	chip.Text = binding.chip
+	chip.TextColor3 = Color3.new(1, 1, 1)
+	chip.TextSize = 10
+	chip.Font = Enum.Font.GothamBold
+	chip.AutoButtonColor = false
+	chip.Parent = chipHolder
+	corner(chip, 5)
+
+	chips[binding.id] = chip
+	chip.Activated:Connect(function()
+		hotkeyEnabled[binding.id] = not hotkeyEnabled[binding.id]
+		paintChip(binding)
+	end)
+end
+
+local function setHotkeys(on)
+	state.Hotkeys = on
+	paintToggle(hotkeyMasterBtn, "Hotkeys", on)
+	paintAllChips()
+end
+
+hotkeyMasterBtn.Activated:Connect(function()
+	setHotkeys(not state.Hotkeys)
+end)
+
+-- Reset turns every binding back on (the footer button was wired up earlier).
+resetBtn.Activated:Connect(function()
+	for _, binding in ipairs(HOTKEYS) do
+		hotkeyEnabled[binding.id] = true
+	end
+	setHotkeys(true)
+end)
+
+setHotkeys(state.Hotkeys)
+
+--------------------------------------------------------------------
+-- HOTKEY DISPATCH
+--------------------------------------------------------------------
+
+local function hotkeyActive(id)
+	return state.Hotkeys and hotkeyEnabled[id]
+end
+
 UserInputService.InputBegan:Connect(function(input, processed)
-	if processed or UserInputService:GetFocusedTextBox() then
+	if processed or not state.Hotkeys or UserInputService:GetFocusedTextBox() then
 		return
 	end
 
 	local code = input.KeyCode
-	if code == Enum.KeyCode.RightShift then
+	if code == Enum.KeyCode.RightShift and hotkeyActive("Panel") then
 		panel.Visible = not panel.Visible
-	elseif code == Enum.KeyCode.F then
+	elseif code == Enum.KeyCode.F and hotkeyActive("Fly") then
 		setFly(not state.Fly)
-	elseif code == Enum.KeyCode.N then
+	elseif code == Enum.KeyCode.N and hotkeyActive("Noclip") then
 		setNoclip(not state.Noclip)
-	elseif code == Enum.KeyCode.B then
+	elseif code == Enum.KeyCode.B and hotkeyActive("Fullbright") then
 		setFullbright(not state.Fullbright)
-	elseif code == Enum.KeyCode.V then
+	elseif code == Enum.KeyCode.V and hotkeyActive("ESP") then
 		setESP(not state.ESP)
-	elseif code == Enum.KeyCode.K then
+	elseif code == Enum.KeyCode.K and hotkeyActive("KeyESP") then
 		setKeyESP(not state.KeyESP)
-	elseif code == Enum.KeyCode.LeftBracket then
+	elseif code == Enum.KeyCode.LeftBracket and hotkeyActive("FOV") then
 		setFOV(state.FOV - 5)
-	elseif code == Enum.KeyCode.RightBracket then
+	elseif code == Enum.KeyCode.RightBracket and hotkeyActive("FOV") then
 		setFOV(state.FOV + 5)
 	end
 end)
