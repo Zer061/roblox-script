@@ -7,7 +7,7 @@
 		VIEW    Field of View, Fullbright, ESP on other players
 		KEY     Object ESP: terms, scan rate, range, then
 		        Auto Move + delay and Go to nearest
-		OPT     Hotkey master switch, per-key on/off, Unload
+		OPT     Hotkeys, UI Scale (resize the panel), Unload
 
 	WHERE TO PUT IT:
 		StarterPlayer > StarterPlayerScripts   (recommended)
@@ -31,6 +31,36 @@ local TweenService = game:GetService("TweenService")
 local player = Players.LocalPlayer
 
 --------------------------------------------------------------------
+-- SHUT DOWN A PREVIOUS RUN
+--   Executing this file twice used to stack a second panel on top of
+--   the first (the ScreenGui survives respawn), so an old build could
+--   still be the one on screen. Kill whatever is already running.
+--------------------------------------------------------------------
+
+do
+	-- Preferred path: the previous run left its own unloader behind, which
+	-- disconnects its loops and restores lighting / collisions properly.
+	local previous = rawget(_G, "PlayerTweaksUnload")
+	if type(previous) == "function" then
+		pcall(previous)
+	end
+
+	-- Fallback for executors that sandbox _G: at least remove the old UI
+	-- and the old range disc so nothing stale is left on screen.
+	local playerGui = player:WaitForChild("PlayerGui")
+	for _, obj in ipairs(playerGui:GetChildren()) do
+		if obj.Name == "PlayerTweaks" then
+			obj:Destroy()
+		end
+	end
+	for _, obj in ipairs(workspace:GetChildren()) do
+		if obj.Name == "SearchRangePreview" then
+			obj:Destroy()
+		end
+	end
+end
+
+--------------------------------------------------------------------
 -- STATE
 --------------------------------------------------------------------
 
@@ -44,6 +74,7 @@ local DEFAULTS = {
 	ScanInterval = 1,
 	MoveDelay = 2,
 	SearchRange = 0, -- studs; 0 means no limit
+	UIScale = 1.2, -- whole-panel zoom
 }
 
 local startCam = workspace.CurrentCamera
@@ -64,6 +95,7 @@ local state = {
 	ScanInterval = DEFAULTS.ScanInterval, -- seconds between workspace sweeps
 	MoveDelay = DEFAULTS.MoveDelay, -- seconds between auto-move hops
 	SearchRange = DEFAULTS.SearchRange, -- studs; 0 means no limit
+	UIScale = DEFAULTS.UIScale, -- whole-panel zoom
 }
 
 -- Key ESP search terms. A name matching ANY of these counts as a hit, so the
@@ -1638,12 +1670,54 @@ end)
 setHotkeys(state.Hotkeys)
 
 --------------------------------------------------------------------
+-- OPT TAB: UI SCALE
+--   One UIScale on the panel blows up the whole thing - rows, buttons
+--   and text together - so the panel can be made comfortable on a big
+--   monitor without every size in the theme table being retuned.
+--------------------------------------------------------------------
+
+local uiScale = Instance.new("UIScale")
+uiScale.Name = "PanelScale"
+uiScale.Scale = state.UIScale
+uiScale.Parent = panel
+
+local setUIScale = numberRow(optPage, 4, "UI Scale", "UIScale", 0.6, 3, 0.1, 1, function(value)
+	uiScale.Scale = value
+end)
+
+-- Quick -/+ in the title bar, so resizing does not mean digging into a tab.
+local function scaleButton(text, xOffset, delta)
+	local btn = Instance.new("TextButton")
+	btn.Name = "Scale" .. (delta > 0 and "Up" or "Down")
+	btn.Size = UDim2.fromOffset(18, 16)
+	btn.Position = UDim2.new(1, xOffset, 0, 1)
+	btn.BackgroundColor3 = THEME.panel
+	btn.Text = text
+	btn.TextColor3 = THEME.muted
+	btn.TextSize = 12
+	btn.Font = Enum.Font.GothamBold
+	btn.Parent = title
+	corner(btn, 4)
+
+	btn.Activated:Connect(function()
+		setUIScale(state.UIScale + delta)
+	end)
+end
+
+scaleButton("-", -42, -0.1)
+scaleButton("+", -20, 0.1)
+
+resetBtn.Activated:Connect(function()
+	setUIScale(DEFAULTS.UIScale)
+end)
+
+--------------------------------------------------------------------
 -- UNLOAD: put the game back the way it was and remove the script
 --------------------------------------------------------------------
 
 local unloadBtn = Instance.new("TextButton")
 unloadBtn.Name = "Unload"
-unloadBtn.LayoutOrder = 4
+unloadBtn.LayoutOrder = 5
 unloadBtn.Size = UDim2.new(1, 0, 0, SIZE.rowH)
 unloadBtn.BackgroundColor3 = THEME.panel
 unloadBtn.Text = "Unload script"
@@ -1708,10 +1782,14 @@ local function unloadScript()
 	end
 	table.clear(connections)
 
+	_G.PlayerTweaksUnload = nil
 	rangeDisc:Destroy()
 	gui:Destroy()
 	print("[Player Tweaks] unloaded")
 end
+
+-- Let a future run of this file shut this one down cleanly.
+_G.PlayerTweaksUnload = unloadScript
 
 local function pressUnload()
 	if unloadArmed then
