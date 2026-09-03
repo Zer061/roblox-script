@@ -1,19 +1,19 @@
 --[[
 	Player Tweaks Panel  (compact / tabbed)
 	---------------------------------------
-	A LocalScript with a small draggable GUI split into five tabs:
+	A LocalScript with a small draggable GUI split into four tabs (each page scrolls if it overflows):
 
 		MOVE    WalkSpeed, Jump, Fly + Fly Speed, Noclip
 		VIEW    Field of View, Fullbright, ESP on other players
-		KEY     Object ESP: search terms, scan rate, search range
-		GO      Auto Move + move delay, Go to nearest
+		KEY     Object ESP: terms, scan rate, range, then
+		        Auto Move + delay and Go to nearest
 		OPT     Hotkey master switch, per-key on/off, Unload
 
 	WHERE TO PUT IT:
 		StarterPlayer > StarterPlayerScripts   (recommended)
 		or StarterGui (as a LocalScript inside a ScreenGui)
 
-	HOTKEYS:
+	HOTKEYS (all OFF by default - enable in the OPT tab):
 		RightShift  show / hide panel      N  noclip
 		F  fly (Space up, LeftCtrl down)   B  fullbright
 		V  player ESP                      K  key ESP
@@ -59,7 +59,7 @@ local state = {
 	Fullbright = false,
 	ESP = false,
 	KeyESP = false,
-	Hotkeys = true,
+	Hotkeys = false, -- master switch starts OFF; turn on in the OPT tab
 	AutoMove = false,
 	ScanInterval = DEFAULTS.ScanInterval, -- seconds between workspace sweeps
 	MoveDelay = DEFAULTS.MoveDelay, -- seconds between auto-move hops
@@ -320,7 +320,7 @@ local function createTab(order, name)
 	local button = Instance.new("TextButton")
 	button.Name = name .. "Tab"
 	button.LayoutOrder = order
-	button.Size = UDim2.new(1 / 5, -3, 1, 0)
+	button.Size = UDim2.new(1 / 4, -3, 1, 0)
 	button.BackgroundColor3 = THEME.panel
 	button.Text = name
 	button.TextColor3 = THEME.muted
@@ -330,10 +330,17 @@ local function createTab(order, name)
 	button.Parent = tabBar
 	corner(button, 6)
 
-	local page = Instance.new("Frame")
+	local page = Instance.new("ScrollingFrame")
 	page.Name = name .. "Page"
 	page.Size = UDim2.fromScale(1, 1)
 	page.BackgroundTransparency = 1
+	page.BorderSizePixel = 0
+	page.ScrollingDirection = Enum.ScrollingDirection.Y
+	page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	page.CanvasSize = UDim2.new()
+	page.ScrollBarThickness = 3
+	page.ScrollBarImageColor3 = THEME.stroke
+	page.ScrollBarImageTransparency = 0.3
 	page.Visible = false
 	page.Parent = pageHolder
 
@@ -353,8 +360,7 @@ end
 local movePage = createTab(1, "MOVE")
 local viewPage = createTab(2, "VIEW")
 local keyPage = createTab(3, "KEY")
-local goPage = createTab(4, "GO")
-local optPage = createTab(5, "OPT")
+local optPage = createTab(4, "OPT")
 
 --------------------------------------------------------------------
 -- CONTROL BUILDERS
@@ -1319,7 +1325,7 @@ numberRow(keyPage, 4, "Range 0=all", "SearchRange", 0, 1000, 50, 0, function()
 end)
 
 --------------------------------------------------------------------
--- GO TAB: TRAVEL TO WHAT WAS FOUND
+-- KEY TAB: TRAVEL TO WHAT WAS FOUND
 --   Auto Move walks the list nearest-first, one hop per Move Delay.
 --   Objects already visited are skipped until nothing is left, then the
 --   list is reused, so a key that respawns is picked up again.
@@ -1359,20 +1365,20 @@ local function nextTarget()
 	return best
 end
 
-local autoMoveBtn = toggleButton(goPage, 1, "Auto Move")
+local autoMoveBtn = toggleButton(keyPage, 5, "Auto Move")
 
-numberRow(goPage, 2, "Move (sec)", "MoveDelay", 0.1, 60, 0.5, 1, nil)
+numberRow(keyPage, 6, "Move (sec)", "MoveDelay", 0.1, 60, 0.5, 1, nil)
 
 local goBtn = Instance.new("TextButton")
 goBtn.Name = "GoToNearest"
-goBtn.LayoutOrder = 3
+goBtn.LayoutOrder = 7
 goBtn.Size = UDim2.new(1, 0, 0, SIZE.rowH)
 goBtn.BackgroundColor3 = THEME.panel
 goBtn.Text = "Go to nearest"
 goBtn.TextColor3 = THEME.key
 goBtn.TextSize = FONTSIZE.toggle
 goBtn.Font = Enum.Font.GothamBold
-goBtn.Parent = goPage
+goBtn.Parent = keyPage
 corner(goBtn, 6)
 
 local function flashGo(text)
@@ -1607,10 +1613,14 @@ for order, binding in ipairs(HOTKEYS) do
 	end)
 end
 
+local HOTKEY_HINT_ON = "RShift menu, F fly, N noclip, B bright,\nV esp, K key, [ ] fov, Del x2 unload"
+local HOTKEY_HINT_OFF = "Hotkeys are OFF\nenable them in the OPT tab"
+
 local function setHotkeys(on)
 	state.Hotkeys = on
 	paintToggle(hotkeyMasterBtn, "Hotkeys", on)
 	paintAllChips()
+	hint.Text = on and HOTKEY_HINT_ON or HOTKEY_HINT_OFF
 end
 
 hotkeyMasterBtn.Activated:Connect(function()
@@ -1622,7 +1632,7 @@ resetBtn.Activated:Connect(function()
 	for _, binding in ipairs(HOTKEYS) do
 		hotkeyEnabled[binding.id] = true
 	end
-	setHotkeys(true)
+	setHotkeys(false) -- default is off
 end)
 
 setHotkeys(state.Hotkeys)
