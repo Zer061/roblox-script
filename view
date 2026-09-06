@@ -1,0 +1,97 @@
+--[[
+    CameraToggle.lua
+    Chuyển đổi góc nhìn thứ nhất <-> thứ ba bằng cuộn chuột.
+
+    Cách dùng:
+        Tạo một LocalScript trong  StarterPlayer > StarterPlayerScripts
+        rồi dán toàn bộ nội dung này vào.
+        (Bắt buộc là LocalScript — Script phía server sẽ không chạy.)
+--]]
+
+local Players          = game:GetService("Players")
+local UserInputService = game:GetService("UserInputService")
+local RunService       = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+
+----------------------------------------------------------------
+-- CẤU HÌNH
+----------------------------------------------------------------
+local FIRST_PERSON_ZOOM = 0.5   -- Roblox tự vào góc nhìn thứ 1 khi zoom <= 1 stud
+local THIRD_PERSON_ZOOM = 12    -- khoảng cách camera khi ở góc nhìn thứ 3
+local SMOOTH            = true  -- true = chuyển mượt, false = nhảy tức thì
+local LERP_SPEED        = 10    -- tốc độ chuyển mượt (càng lớn càng nhanh)
+local SCROLL_COOLDOWN   = 0.12  -- chặn spam cuộn chuột (giây)
+
+----------------------------------------------------------------
+local currentZoom = THIRD_PERSON_ZOOM
+local targetZoom  = THIRD_PERSON_ZOOM
+local lastScroll  = 0
+
+-- Phải là Classic, nếu để LockFirstPerson thì mọi thay đổi zoom đều bị ghi đè
+player.CameraMode = Enum.CameraMode.Classic
+
+-- Ép camera về đúng một khoảng cách bằng cách khóa Min = Max.
+-- Set đúng thứ tự để không rơi vào trạng thái Min > Max.
+local function setZoom(distance)
+    if distance < player.CameraMinZoomDistance then
+        player.CameraMinZoomDistance = distance
+        player.CameraMaxZoomDistance = distance
+    else
+        player.CameraMaxZoomDistance = distance
+        player.CameraMinZoomDistance = distance
+    end
+end
+
+setZoom(currentZoom)
+
+----------------------------------------------------------------
+-- Bắt sự kiện cuộn chuột
+----------------------------------------------------------------
+UserInputService.InputChanged:Connect(function(input, gameProcessed)
+    if gameProcessed then return end -- người chơi đang cuộn bên trong GUI
+    if input.UserInputType ~= Enum.UserInputType.MouseWheel then return end
+
+    local now = os.clock()
+    if now - lastScroll < SCROLL_COOLDOWN then return end
+    lastScroll = now
+
+    -- Position.Z: +1 = cuộn lên (vào gần), -1 = cuộn xuống (ra xa)
+    local delta = input.Position.Z
+    if delta > 0 then
+        targetZoom = FIRST_PERSON_ZOOM
+    elseif delta < 0 then
+        targetZoom = THIRD_PERSON_ZOOM
+    end
+
+    if not SMOOTH then
+        currentZoom = targetZoom
+        setZoom(currentZoom)
+    end
+end)
+
+----------------------------------------------------------------
+-- Nội suy mượt giữa hai khoảng cách
+----------------------------------------------------------------
+if SMOOTH then
+    RunService.RenderStepped:Connect(function(dt)
+        if math.abs(currentZoom - targetZoom) < 0.01 then
+            if currentZoom ~= targetZoom then
+                currentZoom = targetZoom
+                setZoom(currentZoom)
+            end
+            return
+        end
+        currentZoom += (targetZoom - currentZoom) * math.min(dt * LERP_SPEED, 1)
+        setZoom(currentZoom)
+    end)
+end
+
+----------------------------------------------------------------
+-- Giữ nguyên trạng thái sau khi nhân vật hồi sinh
+----------------------------------------------------------------
+player.CharacterAdded:Connect(function()
+    task.wait()
+    player.CameraMode = Enum.CameraMode.Classic
+    setZoom(currentZoom)
+end)
