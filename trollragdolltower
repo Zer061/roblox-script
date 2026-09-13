@@ -1,0 +1,161 @@
+-- استدعاء الخدمات الأساسية
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local player = Players.LocalPlayer
+
+-- متغير التحكم الافتراضي (مغلق عند التشغيل)
+_G.MasterTeleportFarm = false
+
+-- 1. بناء واجهة المستخدم (GUI Design)
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "CustomFarmGUI"
+-- حماية الواجهة من الرصد في المحاقن المتقدمة
+if syn and syn.protect_gui then syn.protect_gui(ScreenGui) end
+ScreenGui.Parent = CoreGui:FindFirstChild("RobloxGui") or CoreGui
+
+-- اللوحة الرئيسية
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainFrame"
+MainFrame.Size = UDim2.new(0, 320, 0, 220)
+MainFrame.Position = UDim2.new(0.5, -160, 0.4, -110)
+MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true -- يمكنك سحب اللوحة بالماوس لأي مكان بالشاشة
+MainFrame.Parent = ScreenGui
+
+-- حواف دائرية للوحة
+local FrameCorner = Instance.new("UICorner")
+FrameCorner.CornerRadius = UDim.new(0, 10)
+FrameCorner.Parent = MainFrame
+
+-- عنوان السكربت
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 45)
+Title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+Title.Text = "Master Teleport Farm"
+Title.TextColor3 = Color3.fromRGB(255, 215, 0) -- لون ذهبي للعنوان
+Title.TextSize = 18
+Title.Font = Enum.Font.FredokaOne
+Title.Parent = MainFrame
+
+local TitleCorner = Instance.new("UICorner")
+TitleCorner.CornerRadius = UDim.new(0, 10)
+TitleCorner.Parent = Title
+
+-- نص الحقوق الخاص بك والمساعد
+local Credits = Instance.new("TextLabel")
+Credits.Size = UDim2.new(1, 0, 0, 25)
+Credits.Position = UDim2.new(0, 0, 0, 45)
+Credits.BackgroundTransparency = 1
+Credits.Text = "by 7s31 and gimni"
+Credits.TextColor3 = Color3.fromRGB(0, 255, 150) -- لون تكنولوجي مميز
+Credits.TextSize = 14
+Credits.Font = Enum.Font.SourceSansBold
+Credits.Parent = MainFrame
+
+-- زر تشغيل وإيقاف الفارم (Toggle Button)
+local ToggleBtn = Instance.new("TextButton")
+ToggleBtn.Size = UDim2.new(0, 260, 0, 50)
+ToggleBtn.Position = UDim2.new(0.5, -130, 0.5, 15)
+ToggleBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50) -- لون أحمر عند الإيقاف
+ToggleBtn.Text = "START FARM"
+ToggleBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ToggleBtn.TextSize = 16
+ToggleBtn.Font = Enum.Font.SourceSansBold
+ToggleBtn.Parent = MainFrame
+
+local BtnCorner = Instance.new("UICorner")
+BtnCorner.CornerRadius = UDim.new(0, 6)
+BtnCorner.Parent = ToggleBtn
+
+-- نص حالة السكربت الحالية
+local StatusLabel = Instance.new("TextLabel")
+StatusLabel.Size = UDim2.new(1, 0, 0, 30)
+StatusLabel.Position = UDim2.new(0, 0, 1, -35)
+StatusLabel.BackgroundTransparency = 1
+StatusLabel.Text = "Status: IDLE"
+StatusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+StatusLabel.TextSize = 14
+StatusLabel.Font = Enum.Font.SourceSans
+StatusLabel.Parent = MainFrame
+
+
+-- 2. دالة الفارم الأساسية (نفس منطق سكربتك الأصلي بالملي)
+local function startFarmLoop()
+    task.spawn(function()
+        while _G.MasterTeleportFarm do
+            task.wait(0.1) -- مهلة استقرار اللاعب بين الدورات
+            
+            local character = player.Character
+            if character and character:FindFirstChild("HumanoidRootPart") and character:FindFirstChildOfClass("Humanoid").Health > 0 then
+                local hrp = character.HumanoidRootPart
+                StatusLabel.Text = "Status: FARMING ACTIVE"
+                
+                ---------------------------------------------------------
+                -- الجزء الأول: الانتقال وتجميع الكاش من 1 إلى 12
+                ---------------------------------------------------------
+                local giveReward = workspace:FindFirstChild("GiveReward")
+                local cashTouchpart = giveReward and giveReward:FindFirstChild("CashTouchpart")
+                
+                if cashTouchpart then
+                    local children = cashTouchpart:GetChildren()
+                    for i = 1, 12 do
+                        if not _G.MasterTeleportFarm then break end
+                        
+                        local item = children[i]
+                        if item and item:IsA("Instance") then
+                            local touchPart = item:FindFirstChild("TouchPart")
+                            if touchPart and touchPart:IsA("BasePart") then
+                                hrp.Velocity = Vector3.new(0, 0, 0)
+                                hrp.CFrame = touchPart.CFrame
+                                task.wait(0.05)
+                            end
+                        end
+                    end
+                end
+                
+                ---------------------------------------------------------
+                -- الجزء الثاني: الانتقال إلى جزء الفوز وإنهاء البرج (Win Room)
+                ---------------------------------------------------------
+                if not _G.MasterTeleportFarm then break end
+                
+                local tower = workspace:FindFirstChild("Tower")
+                local endFolder = tower and tower:FindFirstChild("End")
+                local winRoom = endFolder and endFolder:FindFirstChild("Win Room")
+                local finish = winRoom and winRoom:FindFirstChild("Finish")
+                local winPart = finish and finish:FindFirstChild("TouchPart")
+                
+                if winPart and winPart:IsA("BasePart") then
+                    hrp.Velocity = Vector3.new(0, 0, 0)
+                    hrp.CFrame = winPart.CFrame
+                    task.wait(0.01)
+                end
+                
+            else
+                StatusLabel.Text = "Status: Waiting for Respawn..."
+                task.wait(0.1)
+            end
+        end
+    end)
+end
+
+-- 3. ربط الزر بالتشغيل التلقائي وتغيير الألوان بشكل تفاعلي
+ToggleBtn.MouseButton1Click:Connect(function()
+    _G.MasterTeleportFarm = not _G.MasterTeleportFarm
+    
+    if _G.MasterTeleportFarm then
+        -- عند التشغيل يتحول الزر للون الأخضر
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(50, 150, 50)}):Play()
+        ToggleBtn.Text = "STOP FARM"
+        startFarmLoop()
+    else
+        -- عند الإيقاف يعود للون الأحمر
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(180, 50, 50)}):Play()
+        ToggleBtn.Text = "START FARM"
+        StatusLabel.Text = "Status: STOPPED"
+    end
+end)
+
+print("[Solara] GUI Version loaded by 7s31 and gimni!")
