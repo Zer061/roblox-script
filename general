@@ -1592,10 +1592,13 @@ local function setAutoMove(on)
 					end
 
 					teleportTo(o.part.Position)
+					task.wait(0.3)
+					-- Interact with the target
+					firePromptsOn(o.part)
 
-					-- Return to original position after a short moment
+					-- Return to original position after interaction
 					if state.MoveReturn and savedCF then
-						task.wait(0.3)
+						task.wait(math.max(state.MoveDelay, 0.5))
 						local char = player.Character
 						local root = char and char:FindFirstChild("HumanoidRootPart")
 						if root then
