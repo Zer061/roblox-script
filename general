@@ -1532,80 +1532,44 @@ local function walkTo(position, checkFn)
 		return false
 	end
 
-	local maxRetries = 2
-	local attempt = 0
-
-	while attempt <= maxRetries do
-		for i, wp in ipairs(waypoints) do
+	for i, wp in ipairs(waypoints) do
+		if checkFn and not checkFn() then
+			return false
+		end
+		if wp.Action == Enum.PathWaypointAction.Jump then
+			hum.Jump = true
+		end
+		hum:MoveTo(wp.Position)
+		local reached = false
+		local conn
+		conn = hum.MoveToFinished:Connect(function()
+			reached = true
+			if conn then conn:Disconnect() end
+		end)
+		local startT = tick()
+		local lastPos = root.Position
+		local stuckTime = 0
+		while not reached and (tick() - startT) < 4 do
+			task.wait(0.15)
 			if checkFn and not checkFn() then
+				if conn then conn:Disconnect() end
 				return false
 			end
-			if wp.Action == Enum.PathWaypointAction.Jump then
-				hum.Jump = true
-			end
-			hum:MoveTo(wp.Position)
-			-- Wait for arrival with stuck detection
-			local reached = false
-			local conn
-			conn = hum.MoveToFinished:Connect(function(didReach)
-				reached = true
-				if conn then conn:Disconnect() end
-			end)
-			local startT = tick()
-			local lastPos = root.Position
-			local stuckTime = 0
-			while not reached and (tick() - startT) < 6 do
-				task.wait(0.15)
-				if checkFn and not checkFn() then
+			local moved = (root.Position - lastPos).Magnitude
+			if moved < 0.3 then
+				stuckTime = stuckTime + 0.15
+				if stuckTime >= 1 then
 					if conn then conn:Disconnect() end
-					return false
+					return false -- stuck, give up fast
 				end
-				local moved = (root.Position - lastPos).Magnitude
-				if moved < 0.5 then
-					stuckTime = stuckTime + 0.15
-					if stuckTime >= 1.5 then
-						-- Stuck → try recompute from current position
-						if conn then conn:Disconnect() end
-						reached = nil -- signal stuck
-						break
-					end
-				else
-					stuckTime = 0
-					lastPos = root.Position
-				end
-			end
-			if reached == nil then
-				-- Stuck: recompute path from current position
-				attempt = attempt + 1
-				if attempt > maxRetries then
-					return false
-				end
-				local newWaypoints = nil
-				for _, cfg in ipairs(pathConfigs) do
-					local p2 = PathfindingService:CreatePath(cfg)
-					local ok2 = pcall(function()
-						p2:ComputeAsync(root.Position, position)
-					end)
-					if ok2 and p2.Status == Enum.PathStatus.Success then
-						newWaypoints = p2:GetWaypoints()
-						break
-					end
-				end
-				if not newWaypoints then
-					return false
-				end
-				waypoints = newWaypoints
-				break -- restart waypoint loop with new path
-			end
-			if not reached then
-				if conn then conn:Disconnect() end
+			else
+				stuckTime = 0
+				lastPos = root.Position
 			end
 		end
-		-- Check if we arrived close enough
-		if root.Parent and (root.Position - position).Magnitude < 6 then
-			return true
+		if not reached then
+			if conn then conn:Disconnect() end
 		end
-		attempt = attempt + 1
 	end
 	return (root.Parent and (root.Position - position).Magnitude < 10)
 end
@@ -1712,7 +1676,7 @@ local function setAutoMove(on)
 						if root then savedCF = root.CFrame end
 					end
 
-					-- 2. Teleport to target
+					-- 2. Move to target
 					if state.MoveWalk then
 						local walked = walkTo(o.part.Position, function()
 							return state.AutoMove and generation == autoMoveGen
@@ -1723,9 +1687,13 @@ local function setAutoMove(on)
 					else
 						teleportTo(o.part.Position)
 					end
+					task.wait(0.3) -- let game register new position
 
 					-- 3. Interact with target
-					firePromptsOn(o.part)
+					local fired = firePromptsOn(o.part)
+					if not fired then
+						fireNearbyPrompts(12)
+					end
 
 					-- 4. Wait MoveDelay for game to register
 					task.wait(math.max(state.MoveDelay, 0.5))
