@@ -1689,10 +1689,16 @@ local function setAutoMove(on)
 					end
 					task.wait(0.3) -- let game register new position
 
-					-- 3. Interact with target
+					-- 3. Interact with target (search part, parent model, and nearby)
 					local fired = firePromptsOn(o.part)
 					if not fired then
-						fireNearbyPrompts(12)
+						fired = firePromptsOn(target) -- target = the original instance key
+					end
+					if not fired and o.part.Parent and o.part.Parent ~= workspace then
+						fired = firePromptsOn(o.part.Parent)
+					end
+					if not fired then
+						fireNearbyPrompts(15)
 					end
 
 					-- 4. Wait MoveDelay for game to register
