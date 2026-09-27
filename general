@@ -3,10 +3,11 @@
 	---------------------------------------
 	A LocalScript with a small draggable GUI split into four tabs (each page scrolls if it overflows):
 
-		MOVE    WalkSpeed, Jump, Fly + Fly Speed, Noclip
+		MOVE    WalkSpeed, Jump, Fly + Fly Speed, Noclip, Fast Attack
 		VIEW    Field of View, Fullbright, ESP on other players
 		KEY     Object ESP: terms, scan rate, range, then
-		        Auto Move + delay and Go to nearest
+		        Auto Move + delay, Go to nearest, Instant Prompt,
+		        Auto Rescue (rescue N NPCs then zipline out, loop)
 		OPT     Hotkeys, UI Scale (resize the panel), Unload
 
 	WHERE TO PUT IT:
@@ -27,6 +28,7 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local Lighting = game:GetService("Lighting")
 local TweenService = game:GetService("TweenService")
+local ProximityPromptService = game:GetService("ProximityPromptService")
 
 local player = Players.LocalPlayer
 
@@ -70,11 +72,17 @@ local DEFAULTS = {
 	JumpHeight = 7.2,
 	FOV = 70,
 	FlySpeed = 60,
+	AttackSpeed = 3, -- swing animation speed multiplier
 	KeyQuery = "redkey",
 	ScanInterval = 1,
 	MoveDelay = 2,
 	SearchRange = 0, -- studs; 0 means no limit
 	UIScale = 1.2, -- whole-panel zoom
+	RescueDelay = 1, -- seconds between each NPC rescue
+	DoorDelay = 3, -- seconds to wait after entering door (floor transition)
+	RescueCount = 0, -- 0 = rescue all NPCs, >0 = rescue up to N
+	ExitName = "zipline", -- name pattern for exit object after rescue
+	FloorDelay = 5, -- seconds to wait after going through door to next floor
 }
 
 local startCam = workspace.CurrentCamera
@@ -85,17 +93,27 @@ local state = {
 	JumpHeight = DEFAULTS.JumpHeight,
 	FOV = startCam and startCam.FieldOfView or DEFAULTS.FOV,
 	FlySpeed = DEFAULTS.FlySpeed,
+	AttackSpeed = DEFAULTS.AttackSpeed,
 	Fly = false,
 	Noclip = false,
+	FastAttack = false,
 	Fullbright = false,
 	ESP = false,
 	KeyESP = false,
 	Hotkeys = false, -- master switch starts OFF; turn on in the OPT tab
 	AutoMove = false,
+	MoveReturn = true, -- return to original position after each hop
+	InstantPrompt = false,
+	AutoRescue = false, -- rescue loop
 	ScanInterval = DEFAULTS.ScanInterval, -- seconds between workspace sweeps
 	MoveDelay = DEFAULTS.MoveDelay, -- seconds between auto-move hops
 	SearchRange = DEFAULTS.SearchRange, -- studs; 0 means no limit
 	UIScale = DEFAULTS.UIScale, -- whole-panel zoom
+	RescueDelay = DEFAULTS.RescueDelay,
+	DoorDelay = DEFAULTS.DoorDelay,
+	RescueCount = DEFAULTS.RescueCount,
+	ExitName = DEFAULTS.ExitName,
+	FloorDelay = DEFAULTS.FloorDelay,
 }
 
 -- Key ESP search terms. A name matching ANY of these counts as a hit, so the
@@ -713,6 +731,104 @@ end
 noclipBtn.Activated:Connect(function()
 	setNoclip(not state.Noclip)
 end)
+
+--------------------------------------------------------------------
+-- MOVE TAB: FAST ATTACK
+--   Plays your swing animations faster (tool swings, punches). A game
+--   that waits for the swing to finish before the next hit then hits
+--   faster too; one that uses its own cooldown or limits hits on the
+--   server does not change. Swings are the one-shot or Action-priority
+--   tracks, so looping walk / run / idle animations are left alone.
+--------------------------------------------------------------------
+
+local SWING_PRIORITY = {
+	[Enum.AnimationPriority.Action] = true,
+	[Enum.AnimationPriority.Action2] = true,
+	[Enum.AnimationPriority.Action3] = true,
+	[Enum.AnimationPriority.Action4] = true,
+}
+
+local spedTracks = {} -- AnimationTrack -> speed it had before we touched it
+local swingConn = nil -- AnimationPlayed on the current character's Animator
+
+local function isSwing(track)
+	return SWING_PRIORITY[track.Priority] == true or not track.Looped
+end
+
+local function speedUp(track)
+	if not isSwing(track) then
+		return
+	end
+	if spedTracks[track] == nil then
+		-- forget tracks that finished since the last swing
+		for old in pairs(spedTracks) do
+			if not old.IsPlaying then
+				spedTracks[old] = nil
+			end
+		end
+		spedTracks[track] = track.Speed
+	end
+	track:AdjustSpeed(state.AttackSpeed)
+end
+
+local fastBtn = toggleButton(movePage, 6, "Fast Attack")
+
+numberRow(movePage, 7, "Attack Speed", "AttackSpeed", 1, 10, 0.5, 1, function(value)
+	if state.FastAttack then
+		for track in pairs(spedTracks) do
+			if track.IsPlaying then
+				track:AdjustSpeed(value)
+			end
+		end
+	end
+end)
+
+local function setFastAttack(on)
+	state.FastAttack = on
+	paintToggle(fastBtn, "Fast Attack", on)
+	if on then
+		local hum = getHumanoid()
+		local animator = hum and hum:FindFirstChildOfClass("Animator")
+		if animator then
+			for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+				speedUp(track)
+			end
+		end
+	else
+		for track, speed in pairs(spedTracks) do
+			if track.IsPlaying then
+				track:AdjustSpeed(speed)
+			end
+		end
+		table.clear(spedTracks)
+	end
+end
+
+fastBtn.Activated:Connect(function()
+	setFastAttack(not state.FastAttack)
+end)
+
+-- Every animation the character starts passes through here, so a swing is
+-- sped up the moment it plays. Re-hooked on respawn (new Animator).
+local function hookAnimator(char)
+	if swingConn then
+		swingConn:Disconnect()
+		swingConn = nil
+	end
+	local hum = char and char:WaitForChild("Humanoid", 5)
+	local animator = hum and hum:WaitForChild("Animator", 5)
+	if not animator then
+		return
+	end
+	swingConn = bind(animator.AnimationPlayed, function(track)
+		if state.FastAttack then
+			speedUp(track)
+		end
+	end)
+end
+
+bind(player.CharacterAdded, hookAnimator)
+task.spawn(hookAnimator, player.Character)
 
 --------------------------------------------------------------------
 -- VIEW TAB: FIELD OF VIEW  (low = narrow / zoomed in, high = wide)
@@ -1401,6 +1517,13 @@ local autoMoveBtn = toggleButton(keyPage, 5, "Auto Move")
 
 numberRow(keyPage, 6, "Move (sec)", "MoveDelay", 0.1, 60, 0.5, 1, nil)
 
+local moveReturnBtn = toggleButton(keyPage, 6.5, "Return")
+paintToggle(moveReturnBtn, "Return", state.MoveReturn)
+moveReturnBtn.Activated:Connect(function()
+	state.MoveReturn = not state.MoveReturn
+	paintToggle(moveReturnBtn, "Return", state.MoveReturn)
+end)
+
 local goBtn = Instance.new("TextButton")
 goBtn.Name = "GoToNearest"
 goBtn.LayoutOrder = 7
@@ -1458,7 +1581,27 @@ local function setAutoMove(on)
 			if target then
 				local o = keyObjects[target]
 				if o and o.part and o.part.Parent then
+					-- Save position before teleporting
+					local savedCF
+					if state.MoveReturn then
+						local char = player.Character
+						local root = char and char:FindFirstChild("HumanoidRootPart")
+						if root then
+							savedCF = root.CFrame
+						end
+					end
+
 					teleportTo(o.part.Position)
+
+					-- Return to original position after a short moment
+					if state.MoveReturn and savedCF then
+						task.wait(0.3)
+						local char = player.Character
+						local root = char and char:FindFirstChild("HumanoidRootPart")
+						if root then
+							root.CFrame = savedCF
+						end
+					end
 				end
 				visited[target] = true
 			else
@@ -1471,6 +1614,516 @@ end
 
 autoMoveBtn.Activated:Connect(function()
 	setAutoMove(not state.AutoMove)
+end)
+
+--------------------------------------------------------------------
+-- KEY TAB: INSTANT PROMPT
+--   Every hold-to-use prompt ("hold E to rescue") fires on the first
+--   press. Each prompt's own hold time is remembered and put back when
+--   this is turned off or the script unloads.
+--   Only the timer on our side is skipped: a game that times the hold
+--   on the server can still reject an instant press.
+--------------------------------------------------------------------
+
+local promptBackup = {} -- ProximityPrompt -> original HoldDuration
+
+local function makeInstant(prompt)
+	if prompt.HoldDuration <= 0 then
+		return
+	end
+	if promptBackup[prompt] == nil then
+		-- forget prompts destroyed since the last one (NPCs come and go)
+		for old in pairs(promptBackup) do
+			if old.Parent == nil then
+				promptBackup[old] = nil
+			end
+		end
+		promptBackup[prompt] = prompt.HoldDuration
+	end
+	prompt.HoldDuration = 0
+end
+
+local function restorePrompts()
+	for prompt, duration in pairs(promptBackup) do
+		if prompt.Parent then
+			prompt.HoldDuration = duration
+		end
+	end
+	table.clear(promptBackup)
+end
+
+local instantBtn = toggleButton(keyPage, 8, "Instant Prompt")
+
+local function setInstantPrompt(on)
+	state.InstantPrompt = on
+	paintToggle(instantBtn, "Instant Prompt", on)
+	if on then
+		for _, obj in ipairs(workspace:GetDescendants()) do
+			if obj:IsA("ProximityPrompt") then
+				makeInstant(obj)
+			end
+		end
+	else
+		restorePrompts()
+	end
+end
+
+instantBtn.Activated:Connect(function()
+	setInstantPrompt(not state.InstantPrompt)
+end)
+
+-- Prompts that appear later (a freshly spawned NPC) are caught as soon as
+-- they show up for us, and again when a hold starts in case the game has
+-- re-armed the timer in the meantime.
+local function onPrompt(prompt)
+	if state.InstantPrompt then
+		makeInstant(prompt)
+	end
+end
+
+bind(ProximityPromptService.PromptShown, onPrompt)
+bind(ProximityPromptService.PromptButtonHoldBegan, onPrompt)
+
+--------------------------------------------------------------------
+-- KEY TAB: AUTO RESCUE
+--   Automated rescue loop:
+--     1. Scan workspace for RescueNpc models
+--     2. Teleport to each one (nearest first)
+--     3. Fire its ProximityPrompt to rescue
+--     4. After all NPCs are rescued, find Door and teleport to it
+--     5. Wait for floor transition, then loop from step 1
+--
+--   Works with NPC naming pattern: RescueNpc_<id>_<floor>
+--   (e.g. RescueNpc_90601_3, RescueNpc_90702_3)
+--------------------------------------------------------------------
+
+-- Helper: fire a ProximityPrompt programmatically.
+-- Uses the executor's fireproximityprompt global when available.
+local function firePrompt(prompt)
+	local oldHold = prompt.HoldDuration
+	prompt.HoldDuration = 0
+
+	local ok = false
+	-- Most modern executors (Synapse, Fluxus, etc.) expose this global
+	if type(fireproximityprompt) == "function" then
+		ok = pcall(fireproximityprompt, prompt)
+	end
+	if not ok then
+		-- Fallback: try the internal method some executors allow
+		pcall(function()
+			prompt:InputHoldBegin()
+			task.wait(0.15)
+			prompt:InputHoldEnd()
+		end)
+	end
+
+	task.wait(0.15)
+	prompt.HoldDuration = oldHold
+end
+
+-- Scan workspace for all ProximityPrompts within `radius` studs of the
+-- player's current position and fire each one.  Returns true if any found.
+local function fireNearbyPrompts(radius)
+	local origin = measureOrigin()
+	if not origin then return false end
+	local found = false
+	for _, desc in ipairs(workspace:GetDescendants()) do
+		if desc:IsA("ProximityPrompt") then
+			local part = desc:FindFirstAncestorWhichIsA("BasePart")
+				or desc.Parent and desc.Parent:IsA("BasePart") and desc.Parent
+			if part then
+				local dist = (part.Position - origin).Magnitude
+				if dist <= radius then
+					firePrompt(desc)
+					found = true
+				end
+			end
+		end
+	end
+	return found
+end
+
+-- Search inside an instance (and its parent's children) for ProximityPrompts
+-- and fire each one. Returns true if at least one was found.
+local function firePromptsOn(inst)
+	local found = false
+
+	-- The instance itself
+	if inst:IsA("ProximityPrompt") then
+		firePrompt(inst)
+		found = true
+	end
+
+	-- Inside the instance and its descendants
+	for _, desc in ipairs(inst:GetDescendants()) do
+		if desc:IsA("ProximityPrompt") then
+			firePrompt(desc)
+			found = true
+		end
+	end
+
+	-- Sibling prompts (prompt might sit next to the NPC model, not inside it)
+	if not found and inst.Parent then
+		for _, child in ipairs(inst.Parent:GetChildren()) do
+			if child:IsA("ProximityPrompt") then
+				firePrompt(child)
+				found = true
+			end
+		end
+	end
+
+	return found
+end
+
+-- Separator label in the KEY tab
+local rescueHeader = Instance.new("TextLabel")
+rescueHeader.Name = "RescueHeader"
+rescueHeader.LayoutOrder = 9
+rescueHeader.Size = UDim2.new(1, 0, 0, 16)
+rescueHeader.BackgroundTransparency = 1
+rescueHeader.Text = "── Auto Rescue ──"
+rescueHeader.TextColor3 = THEME.accent
+rescueHeader.TextSize = 10
+rescueHeader.Font = Enum.Font.GothamBold
+rescueHeader.Parent = keyPage
+
+local autoRescueBtn = toggleButton(keyPage, 10, "Auto Rescue")
+
+numberRow(keyPage, 11, "Rescue #  0=all", "RescueCount", 0, 50, 1, 0, nil)
+numberRow(keyPage, 12, "Rescue (sec)", "RescueDelay", 0.1, 10, 0.5, 1, nil)
+numberRow(keyPage, 13, "Floor (sec)", "FloorDelay", 1, 30, 1, 0, nil)
+numberRow(keyPage, 14, "Exit (sec)", "DoorDelay", 0.5, 15, 0.5, 1, nil)
+
+-- What to teleport to after rescuing. Default "zipline" matches ZiplineBalconyAnchor.
+local exitBox = textRow(keyPage, 15, "Exit name", state.ExitName, "zipline", function(text)
+	local trimmed = string.match(text or "", "^%s*(.-)%s*$") or ""
+	if trimmed == "" then
+		trimmed = DEFAULTS.ExitName
+	end
+	state.ExitName = string.lower(trimmed)
+	return state.ExitName
+end)
+
+-- HUD: shows what Auto Rescue is currently doing
+local rescueHud = Instance.new("TextLabel")
+rescueHud.Name = "RescueHud"
+rescueHud.Size = UDim2.fromOffset(320, 28)
+rescueHud.Position = UDim2.new(0.5, -160, 0, 42)
+rescueHud.BackgroundColor3 = Color3.new(0, 0, 0)
+rescueHud.BackgroundTransparency = 0.45
+rescueHud.Font = Enum.Font.GothamBold
+rescueHud.TextSize = 14
+rescueHud.TextColor3 = THEME.ally
+rescueHud.TextStrokeTransparency = 0.4
+rescueHud.Text = ""
+rescueHud.Visible = false
+rescueHud.Parent = gui
+corner(rescueHud, 6)
+
+local autoRescueGen = 0
+
+local function setAutoRescue(on)
+	state.AutoRescue = on
+	paintToggle(autoRescueBtn, "Auto Rescue", on)
+	rescueHud.Visible = on
+
+	autoRescueGen = autoRescueGen + 1
+	if not on then
+		rescueHud.Visible = false
+		return
+	end
+
+	-- Turn on Instant Prompt so rescues happen on contact
+	if not state.InstantPrompt then
+		setInstantPrompt(true)
+	end
+
+	local generation = autoRescueGen
+	task.spawn(function()
+		while state.AutoRescue and generation == autoRescueGen do
+
+			-------------------------------------------------
+			-- Phase 1: rescue NPCs until quota is met
+			--   If RescueCount=5 but only 3 NPCs exist now,
+			--   rescue those 3, wait, rescan, rescue more
+			--   until total reaches 5. RescueCount=0 means
+			--   rescue ALL found in one scan pass.
+			-------------------------------------------------
+			local target = (state.RescueCount > 0) and state.RescueCount or 0
+			local rescued = 0
+			local rescuedSet = {} -- track instances already rescued
+
+			while state.AutoRescue and generation == autoRescueGen do
+				-- Scan for NPCs we haven't rescued yet
+				local npcs = {}
+				for _, inst in ipairs(workspace:GetDescendants()) do
+					if string.find(string.lower(inst.Name), "rescuenpc") then
+						if not rescuedSet[inst] then
+							local part = anchorPart(inst)
+							if part and not isMine(inst) then
+								table.insert(npcs, { instance = inst, part = part })
+							end
+						end
+					end
+				end
+
+				-- Sort nearest first
+				local origin = measureOrigin()
+				if origin then
+					table.sort(npcs, function(a, b)
+						return (a.part.Position - origin).Magnitude
+							 < (b.part.Position - origin).Magnitude
+					end)
+				end
+
+				-- How many to rescue this pass
+				local remaining
+				if target > 0 then
+					remaining = target - rescued
+				else
+					remaining = #npcs -- 0=all: rescue everything found
+				end
+
+				rescueHud.Text = string.format(
+					"RESCUE: %d done, found %d new, need %s",
+					rescued, #npcs,
+					target > 0 and tostring(target) or "all"
+				)
+				rescueHud.TextColor3 = THEME.ally
+				rescueHud.Visible = true
+
+				-- Quota already met → move on to zipline
+				if target > 0 and rescued >= target then
+					break
+				end
+				-- 0=all mode and no NPCs left → move on to zipline
+				if target == 0 and #npcs == 0 then
+					break
+				end
+
+				if #npcs == 0 and target > 0 and rescued < target then
+					----------------------------------------------
+					-- No NPCs on this floor but quota not met
+					-- → go to Door to advance to next floor
+					----------------------------------------------
+					rescueHud.Text = string.format(
+						"RESCUE: %d/%d — no NPCs, going to Door...",
+						rescued, target
+					)
+					rescueHud.TextColor3 = THEME.key
+
+					origin = measureOrigin()
+					local doors = {}
+					for _, inst in ipairs(workspace:GetDescendants()) do
+						-- Match instances named exactly "Door" that have DoorHpUi
+						-- anywhere inside them (recursive search)
+						if string.lower(inst.Name) == "door"
+							and inst:FindFirstChild("DoorHpUi", true) then
+							local part = anchorPart(inst)
+								or inst:FindFirstChildWhichIsA("BasePart", true)
+							-- Only pick doors ABOVE the player (next floor up)
+							if part and origin and part.Position.Y > origin.Y then
+								table.insert(doors, { instance = inst, part = part })
+							end
+						end
+					end
+					if origin and #doors > 0 then
+						table.sort(doors, function(a, b)
+							return (a.part.Position - origin).Magnitude
+								 < (b.part.Position - origin).Magnitude
+						end)
+					end
+
+					if #doors > 0 and doors[1].part and doors[1].part.Parent then
+						local doorInst = doors[1].instance
+						local doorDist = origin and math.floor((doors[1].part.Position - origin).Magnitude) or 0
+						rescueHud.Text = string.format(
+							"FLOOR: → %s [%dm] (%d found, %d/%d rescued)",
+							doorInst.Name, doorDist, #doors, rescued, target
+						)
+						local doorPos = doors[1].part.Position
+						local char = player.Character
+						local root = char and char:FindFirstChild("HumanoidRootPart")
+
+						-- Calculate direction toward door
+						local dirToDoor
+						if root then
+							dirToDoor = (doorPos - root.Position)
+							dirToDoor = Vector3.new(dirToDoor.X, 0, dirToDoor.Z)
+							if dirToDoor.Magnitude > 0.01 then
+								dirToDoor = dirToDoor.Unit
+							else
+								dirToDoor = root.CFrame.LookVector
+							end
+							-- Teleport to 3 studs in front of door, facing it
+							local standPos = doorPos - dirToDoor * 3 + Vector3.new(0, 3, 0)
+							root.CFrame = CFrame.new(standPos, doorPos)
+						end
+						task.wait(0.3)
+
+						-- Phase A: attack the door until DoorHpUi disappears
+						local attackStart = tick()
+						local maxAttackTime = 30 -- timeout after 30s
+						while doorInst:FindFirstChild("DoorHpUi", true)
+							and state.AutoRescue
+							and generation == autoRescueGen
+							and (tick() - attackStart) < maxAttackTime do
+
+							rescueHud.Text = string.format(
+								"DOOR: attacking %s...", doorInst.Name
+							)
+							-- Fire prompts on door and nearby
+							firePromptsOn(doorInst)
+							fireNearbyPrompts(10)
+							task.wait(0.5)
+
+							-- Wiggle in front of the door to keep attacking
+							if root and root.Parent and dirToDoor then
+								local nearPos = doorPos - dirToDoor * 2.5 + Vector3.new(0, 3, 0)
+								local farPos  = doorPos - dirToDoor * 4 + Vector3.new(0, 3, 0)
+								root.CFrame = CFrame.new(nearPos, doorPos)
+								task.wait(0.3)
+								root.CFrame = CFrame.new(farPos, doorPos)
+								task.wait(0.3)
+							end
+						end
+
+						-- Phase B: door broken → walk through into the room
+						if not doorInst:FindFirstChild("DoorHpUi", true) then
+							rescueHud.Text = string.format(
+								"DOOR: %s broken! entering room...", doorInst.Name
+							)
+							teleportTo(doorPos)
+							task.wait(0.5)
+							-- Move a bit past the door to get inside
+							if root and root.Parent and dirToDoor then
+								local insidePos = doorPos + dirToDoor * 5 + Vector3.new(0, 3, 0)
+								root.CFrame = CFrame.new(insidePos, insidePos + dirToDoor)
+							end
+							task.wait(0.3)
+						end
+					else
+						-- Count all "Door" instances for debug
+						local allDoors = 0
+						local doorsWithHp = 0
+						for _, inst in ipairs(workspace:GetDescendants()) do
+							if string.lower(inst.Name) == "door" then
+								allDoors = allDoors + 1
+								if inst:FindFirstChild("DoorHpUi", true) then
+									doorsWithHp = doorsWithHp + 1
+								end
+							end
+						end
+						rescueHud.Text = string.format(
+							"RESCUE: no Door above — total:%d withHP:%d",
+							allDoors, doorsWithHp
+						)
+					end
+
+					-- Wait for new floor to load
+					rescueHud.Text = string.format(
+						"FLOOR: waiting %ds for next floor... (%d/%d)",
+						state.FloorDelay, rescued, target
+					)
+					task.wait(math.max(state.FloorDelay, 1))
+				else
+					-- Rescue NPCs this pass
+					local count = 0
+					for _, npc in ipairs(npcs) do
+						if count >= remaining then break end
+						if not state.AutoRescue or generation ~= autoRescueGen then
+							break
+						end
+						if npc.part and npc.part.Parent and npc.instance.Parent then
+							rescued = rescued + 1
+							rescuedSet[npc.instance] = true
+							rescueHud.Text = string.format(
+								"RESCUE: %d/%s  →  %s",
+								rescued,
+								target > 0 and tostring(target) or "all",
+								npc.instance.Name
+							)
+							teleportTo(npc.part.Position)
+							task.wait(0.3)
+							firePromptsOn(npc.instance)
+							count = count + 1
+							task.wait(math.max(state.RescueDelay, 0.1))
+						end
+					end
+
+					-- After rescuing this batch, check quota
+					if target > 0 and rescued >= target then
+						break -- quota met → zipline
+					end
+					if target == 0 then
+						break -- 0=all mode, one pass done → zipline
+					end
+
+					-- Still need more → short wait then rescan same floor
+					task.wait(math.max(state.RescueDelay, 0.5))
+				end
+			end
+
+			if not state.AutoRescue or generation ~= autoRescueGen then
+				break
+			end
+
+			-------------------------------------------------
+			-- Phase 2: go to the nearest exit object
+			--   Default "zipline" matches ZiplineBalconyAnchor
+			-------------------------------------------------
+			local exitSearch = state.ExitName
+			rescueHud.Text = string.format("RESCUE: done %d → finding %s...", rescued, exitSearch)
+			rescueHud.TextColor3 = THEME.key
+			task.wait(0.5)
+
+			origin = measureOrigin() -- refresh after teleports
+			local exits = {}
+			for _, inst in ipairs(workspace:GetDescendants()) do
+				if string.find(string.lower(inst.Name), exitSearch, 1, true) then
+					local part = anchorPart(inst)
+					if part then
+						table.insert(exits, { instance = inst, part = part })
+					end
+				end
+			end
+
+			if origin and #exits > 0 then
+				table.sort(exits, function(a, b)
+					return (a.part.Position - origin).Magnitude
+						 < (b.part.Position - origin).Magnitude
+				end)
+			end
+
+			if #exits > 0 and exits[1].part and exits[1].part.Parent then
+				rescueHud.Text = string.format("EXIT: → %s", exits[1].instance.Name)
+				teleportTo(exits[1].part.Position)
+				task.wait(0.3)
+				local fired = firePromptsOn(exits[1].instance)
+				if not fired then
+					-- Fallback: scan for any ProximityPrompt within 15 studs
+					task.wait(0.2)
+					fireNearbyPrompts(15)
+				end
+			else
+				rescueHud.Text = string.format("RESCUE: no '%s' found, retrying...", exitSearch)
+			end
+
+			-- Turn off after reaching zipline so user can inspect
+			rescueHud.Text = string.format("RESCUE: done %d — stopped.", rescued)
+			setAutoRescue(false)
+			break
+		end
+
+		-- Loop ended
+		if rescueHud.Parent then
+			rescueHud.Visible = false
+		end
+	end)
+end
+
+autoRescueBtn.Activated:Connect(function()
+	setAutoRescue(not state.AutoRescue)
 end)
 
 --------------------------------------------------------------------
@@ -1533,15 +2186,25 @@ resetBtn.Activated:Connect(function()
 	state.JumpHeight = DEFAULTS.JumpHeight
 	state.ScanInterval = DEFAULTS.ScanInterval
 	state.MoveDelay = DEFAULTS.MoveDelay
+	state.MoveReturn = true
 	state.SearchRange = DEFAULTS.SearchRange
 	state.FlySpeed = DEFAULTS.FlySpeed
+	state.AttackSpeed = DEFAULTS.AttackSpeed
+	state.RescueDelay = DEFAULTS.RescueDelay
+	state.DoorDelay = DEFAULTS.DoorDelay
+	state.RescueCount = DEFAULTS.RescueCount
+	state.ExitName = DEFAULTS.ExitName
+	state.FloorDelay = DEFAULTS.FloorDelay
 
+	setAutoRescue(false)
 	setAutoMove(false)
 	setFly(false)
 	setNoclip(false)
+	setFastAttack(false)
 	setFullbright(false)
 	setESP(false)
 	setKeyESP(false)
+	setInstantPrompt(false)
 
 	fovOverride = false
 	state.FOV = DEFAULTS.FOV
@@ -1552,6 +2215,7 @@ resetBtn.Activated:Connect(function()
 
 	keyQueries = { DEFAULTS.KeyQuery }
 	queryBox.Text = DEFAULTS.KeyQuery
+	exitBox.Text = DEFAULTS.ExitName
 
 	for _, refresh in pairs(rows) do
 		refresh()
@@ -1751,13 +2415,17 @@ end
 
 local function unloadScript()
 	-- 1. switch every feature off through its own setter, which restores
-	--    lighting, collisions, highlights and the fly mover.
+	--    lighting, collisions, highlights, prompt hold times, swing speed
+	--    and the fly mover.
+	setAutoRescue(false)
 	setAutoMove(false)
 	setFly(false)
 	setNoclip(false)
+	setFastAttack(false)
 	setFullbright(false)
 	setESP(false)
 	setKeyESP(false)
+	setInstantPrompt(false)
 
 	-- 2. hand the camera back to the game
 	if fovOverride then
