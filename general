@@ -1508,51 +1508,106 @@ local function walkTo(position, checkFn)
 		return false
 	end
 
-	local path = PathfindingService:CreatePath({
-		AgentRadius = 2,
-		AgentHeight = 5,
-		AgentCanJump = true,
-	})
+	-- Try multiple AgentRadius: smaller radius can fit through narrow doors
+	local pathConfigs = {
+		{ AgentRadius = 2, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 4 },
+		{ AgentRadius = 1, AgentHeight = 5, AgentCanJump = true, WaypointSpacing = 3 },
+		{ AgentRadius = 0.5, AgentHeight = 4, AgentCanJump = true, WaypointSpacing = 2 },
+	}
 
-	local ok, err = pcall(function()
-		path:ComputeAsync(root.Position, position)
-	end)
-	if not ok or path.Status ~= Enum.PathStatus.Success then
-		-- Pathfinding failed → fallback to direct walk
-		hum:MoveTo(position)
-		hum.MoveToFinished:Wait()
-		return true
+	local waypoints = nil
+	for _, cfg in ipairs(pathConfigs) do
+		local path = PathfindingService:CreatePath(cfg)
+		local ok = pcall(function()
+			path:ComputeAsync(root.Position, position)
+		end)
+		if ok and path.Status == Enum.PathStatus.Success then
+			waypoints = path:GetWaypoints()
+			break
+		end
 	end
 
-	local waypoints = path:GetWaypoints()
-	for i, wp in ipairs(waypoints) do
-		if checkFn and not checkFn() then
-			return false
-		end
-		if wp.Action == Enum.PathWaypointAction.Jump then
-			hum.Jump = true
-		end
-		hum:MoveTo(wp.Position)
-		-- Wait for arrival or timeout (8s per waypoint)
-		local reached = false
-		local conn
-		conn = hum.MoveToFinished:Connect(function(didReach)
-			reached = true
-			if conn then conn:Disconnect() end
-		end)
-		local startT = tick()
-		while not reached and (tick() - startT) < 8 do
-			task.wait(0.1)
+	if not waypoints then
+		-- All configs failed → skip target
+		return false
+	end
+
+	local maxRetries = 2
+	local attempt = 0
+
+	while attempt <= maxRetries do
+		for i, wp in ipairs(waypoints) do
 			if checkFn and not checkFn() then
-				if conn then conn:Disconnect() end
 				return false
 			end
+			if wp.Action == Enum.PathWaypointAction.Jump then
+				hum.Jump = true
+			end
+			hum:MoveTo(wp.Position)
+			-- Wait for arrival with stuck detection
+			local reached = false
+			local conn
+			conn = hum.MoveToFinished:Connect(function(didReach)
+				reached = true
+				if conn then conn:Disconnect() end
+			end)
+			local startT = tick()
+			local lastPos = root.Position
+			local stuckTime = 0
+			while not reached and (tick() - startT) < 6 do
+				task.wait(0.15)
+				if checkFn and not checkFn() then
+					if conn then conn:Disconnect() end
+					return false
+				end
+				local moved = (root.Position - lastPos).Magnitude
+				if moved < 0.5 then
+					stuckTime = stuckTime + 0.15
+					if stuckTime >= 1.5 then
+						-- Stuck → try recompute from current position
+						if conn then conn:Disconnect() end
+						reached = nil -- signal stuck
+						break
+					end
+				else
+					stuckTime = 0
+					lastPos = root.Position
+				end
+			end
+			if reached == nil then
+				-- Stuck: recompute path from current position
+				attempt = attempt + 1
+				if attempt > maxRetries then
+					return false
+				end
+				local newWaypoints = nil
+				for _, cfg in ipairs(pathConfigs) do
+					local p2 = PathfindingService:CreatePath(cfg)
+					local ok2 = pcall(function()
+						p2:ComputeAsync(root.Position, position)
+					end)
+					if ok2 and p2.Status == Enum.PathStatus.Success then
+						newWaypoints = p2:GetWaypoints()
+						break
+					end
+				end
+				if not newWaypoints then
+					return false
+				end
+				waypoints = newWaypoints
+				break -- restart waypoint loop with new path
+			end
+			if not reached then
+				if conn then conn:Disconnect() end
+			end
 		end
-		if not reached then
-			if conn then conn:Disconnect() end
+		-- Check if we arrived close enough
+		if root.Parent and (root.Position - position).Magnitude < 6 then
+			return true
 		end
+		attempt = attempt + 1
 	end
-	return true
+	return (root.Parent and (root.Position - position).Magnitude < 10)
 end
 
 local function nextTarget()
