@@ -102,7 +102,7 @@ local state = {
 	KeyESP = false,
 	Hotkeys = false, -- master switch starts OFF; turn on in the OPT tab
 	AutoMove = false,
-	MoveReturn = true, -- return to original position after each hop
+	MoveReturn = false, -- return to original position after each hop
 	MoveWalk = false,  -- use pathfinding walk instead of teleport
 	InstantPrompt = false,
 	AutoRescue = false, -- rescue loop
@@ -1715,10 +1715,13 @@ local function setAutoMove(on)
 					end
 
 					if state.MoveWalk then
-						-- Walk mode: pathfind around walls
-						walkTo(o.part.Position, function()
+						-- Walk mode: pathfind around walls, fallback teleport
+						local walked = walkTo(o.part.Position, function()
 							return state.AutoMove and generation == autoMoveGen
 						end)
+						if not walked then
+							teleportTo(o.part.Position)
+						end
 					else
 						-- Teleport mode: instant
 						teleportTo(o.part.Position)
@@ -1732,12 +1735,17 @@ local function setAutoMove(on)
 					-- Return to original position after interaction
 					if state.MoveReturn and savedCF then
 						if state.MoveWalk then
-							walkTo(
+							local walkedBack = walkTo(
 								Vector3.new(savedCF.X, savedCF.Y, savedCF.Z),
 								function()
 									return state.AutoMove and generation == autoMoveGen
 								end
 							)
+							if not walkedBack then
+								local c2 = player.Character
+								local r2 = c2 and c2:FindFirstChild("HumanoidRootPart")
+								if r2 then r2.CFrame = savedCF end
+							end
 						else
 							local char = player.Character
 							local root = char and char:FindFirstChild("HumanoidRootPart")
@@ -2330,7 +2338,7 @@ resetBtn.Activated:Connect(function()
 	state.JumpHeight = DEFAULTS.JumpHeight
 	state.ScanInterval = DEFAULTS.ScanInterval
 	state.MoveDelay = DEFAULTS.MoveDelay
-	state.MoveReturn = true
+	state.MoveReturn = false
 	state.MoveWalk = false
 	state.SearchRange = DEFAULTS.SearchRange
 	state.FlySpeed = DEFAULTS.FlySpeed
