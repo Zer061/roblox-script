@@ -103,6 +103,7 @@ local state = {
 	Hotkeys = false, -- master switch starts OFF; turn on in the OPT tab
 	AutoMove = false,
 	MoveReturn = true, -- return to original position after each hop
+	MoveWalk = false,  -- use pathfinding walk instead of teleport
 	InstantPrompt = false,
 	AutoRescue = false, -- rescue loop
 	ScanInterval = DEFAULTS.ScanInterval, -- seconds between workspace sweeps
@@ -1494,6 +1495,66 @@ local function teleportTo(position)
 	return true
 end
 
+-- Walk to a position using PathfindingService (finds path around walls).
+-- `checkFn` is called between waypoints; if it returns false the walk stops.
+-- Returns true if arrived, false if cancelled or path failed.
+local PathfindingService = game:GetService("PathfindingService")
+
+local function walkTo(position, checkFn)
+	local char = player.Character
+	local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not hum or not root then
+		return false
+	end
+
+	local path = PathfindingService:CreatePath({
+		AgentRadius = 2,
+		AgentHeight = 5,
+		AgentCanJump = true,
+	})
+
+	local ok, err = pcall(function()
+		path:ComputeAsync(root.Position, position)
+	end)
+	if not ok or path.Status ~= Enum.PathStatus.Success then
+		-- Pathfinding failed → fallback to direct walk
+		hum:MoveTo(position)
+		hum.MoveToFinished:Wait()
+		return true
+	end
+
+	local waypoints = path:GetWaypoints()
+	for i, wp in ipairs(waypoints) do
+		if checkFn and not checkFn() then
+			return false
+		end
+		if wp.Action == Enum.PathWaypointAction.Jump then
+			hum.Jump = true
+		end
+		hum:MoveTo(wp.Position)
+		-- Wait for arrival or timeout (8s per waypoint)
+		local reached = false
+		local conn
+		conn = hum.MoveToFinished:Connect(function(didReach)
+			reached = true
+			if conn then conn:Disconnect() end
+		end)
+		local startT = tick()
+		while not reached and (tick() - startT) < 8 do
+			task.wait(0.1)
+			if checkFn and not checkFn() then
+				if conn then conn:Disconnect() end
+				return false
+			end
+		end
+		if not reached then
+			if conn then conn:Disconnect() end
+		end
+	end
+	return true
+end
+
 local function nextTarget()
 	local myChar = player.Character
 	local myRoot = myChar and myChar:FindFirstChild("HumanoidRootPart")
@@ -1522,6 +1583,13 @@ paintToggle(moveReturnBtn, "Return", state.MoveReturn)
 moveReturnBtn.Activated:Connect(function()
 	state.MoveReturn = not state.MoveReturn
 	paintToggle(moveReturnBtn, "Return", state.MoveReturn)
+end)
+
+local moveWalkBtn = toggleButton(keyPage, 6.6, "Walk")
+paintToggle(moveWalkBtn, "Walk", state.MoveWalk)
+moveWalkBtn.Activated:Connect(function()
+	state.MoveWalk = not state.MoveWalk
+	paintToggle(moveWalkBtn, "Walk", state.MoveWalk)
 end)
 
 local goBtn = Instance.new("TextButton")
@@ -1581,7 +1649,7 @@ local function setAutoMove(on)
 			if target then
 				local o = keyObjects[target]
 				if o and o.part and o.part.Parent then
-					-- Save position before teleporting
+					-- Save position before moving
 					local savedCF
 					if state.MoveReturn then
 						local char = player.Character
@@ -1591,7 +1659,15 @@ local function setAutoMove(on)
 						end
 					end
 
-					teleportTo(o.part.Position)
+					if state.MoveWalk then
+						-- Walk mode: pathfind around walls
+						walkTo(o.part.Position, function()
+							return state.AutoMove and generation == autoMoveGen
+						end)
+					else
+						-- Teleport mode: instant
+						teleportTo(o.part.Position)
+					end
 					task.wait(1)
 					-- Interact with the target
 					firePromptsOn(o.part)
@@ -1600,10 +1676,19 @@ local function setAutoMove(on)
 
 					-- Return to original position after interaction
 					if state.MoveReturn and savedCF then
-						local char = player.Character
-						local root = char and char:FindFirstChild("HumanoidRootPart")
-						if root then
-							root.CFrame = savedCF
+						if state.MoveWalk then
+							walkTo(
+								Vector3.new(savedCF.X, savedCF.Y, savedCF.Z),
+								function()
+									return state.AutoMove and generation == autoMoveGen
+								end
+							)
+						else
+							local char = player.Character
+							local root = char and char:FindFirstChild("HumanoidRootPart")
+							if root then
+								root.CFrame = savedCF
+							end
 						end
 					end
 				end
@@ -2191,6 +2276,7 @@ resetBtn.Activated:Connect(function()
 	state.ScanInterval = DEFAULTS.ScanInterval
 	state.MoveDelay = DEFAULTS.MoveDelay
 	state.MoveReturn = true
+	state.MoveWalk = false
 	state.SearchRange = DEFAULTS.SearchRange
 	state.FlySpeed = DEFAULTS.FlySpeed
 	state.AttackSpeed = DEFAULTS.AttackSpeed
